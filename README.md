@@ -21,7 +21,7 @@ Debugging is a BIG bonus with PlatformIO. NeuralWear1.0 provides an on-board CMS
 
 *Fig.1: Overview of the NeuralWear hardware and a control computer*
 
-Figure 1 presents an overview of our NeuralWear devices, which consist of (1) a control computer, (2) a NeuralWear biosignals acquisition device, (3) a pair of Behind-the-ears (BTE) silicone earpieces, and (4) pre-gelled disposable snap-on electrodes. The Control Computer hosts software called OpenVibe, which provides the ability to stream biosignals and motion data from the Earable device through Bluetooth, visualise the captured signals in real-time, and store data for later processing. The Earable biosignals acquisition device provides the ability to capture biosignals and motion data and forward them to the Control Computer. It can also measure the current battery percentage and charge the battery with an internal charging circuit. The BTE silicone earpieces hold active electrode circuits that are covered in soft silicone, together with 4 snap-on connectors providing the connection to electrodes. The Philips SmartSleep pre-gelled disposable electrodes [*] are used together with our earpieces. These electrodes are chosen because of their curved shape to fit behind the subject's ears. However, other pre-gelled snap-on electrodes such as [**] can be used as alternatives as well.
+Figure 1 presents an overview of our NeuralWear devices, which consist of (1) a control computer, (2) a NeuralWear biosignals acquisition device, (3) a pair of Behind-the-ears (BTE) silicone earpieces, and (4) pre-gelled disposable snap-on electrodes. The Control Computer hosts software called OpenVibe, which provides the ability to stream biosignals and motion data from the NeuralWear device through Bluetooth, visualise the captured signals in real-time, and store data for later processing. The NeuralWear biosignals acquisition device provides the ability to capture biosignals and motion data and forward them to the Control Computer. It can also measure the current battery percentage and charge the battery with an internal charging circuit. The BTE silicone earpieces hold active electrode circuits that are covered in soft silicone, together with 4 snap-on connectors providing the connection to electrodes. The Philips SmartSleep pre-gelled disposable electrodes [*] are used together with our earpieces. These electrodes are chosen because of their curved shape to fit behind the subject's ears. However, other pre-gelled snap-on electrodes such as [**] can be used as alternatives as well.
 
 [*] https://www.usa.philips.com/c-p/HH1601_01/smartsleep-deep-sleep-headband-30-replacement-sensors 
 
@@ -34,7 +34,7 @@ Figure 1 presents an overview of our NeuralWear devices, which consist of (1) a 
 *Fig.2: The control computer*
 
 Any Windows laptop with a Bluetooth 2.0 connection can act as a control computer. Download the provided OpenVIBE_with_dlls.zip file and extract it to the computer. On the Control Computer, we have some important files and folders:
-1.	Openvibe-acquisition-server: This software creates the Bluetooth connection to the Earable device and streams data from the device to the Computer.
+1.	Openvibe-acquisition-server: This software creates the Bluetooth connection to the NeuralWear device and streams data from the device to the Computer.
 2.	Openvibe-designer: This software runs the data visualisation and collection processing to plot the captured signal in real-time and store it to files.
 3.	Earable_data_visualization_collection.xml: This file is used together with OpenVibe-designer for data visualisation and collection.
 4.	Data collection folder: We can store all the collected study data in this folder.
@@ -64,7 +64,7 @@ On the Driver box, we choose the iES driver. Then, to choose the device to conne
 
 *Fig.5: Driver Properties box*
 
-Click on the Device box and choose the right COM port of the device (each device will have a sticker with a COM port to connect to). Click Apply to close the window. In the main window of the OpenVibe-acquisition-server (Figure 4), click Connect to connect to the Earable device. If the connection is successful, the Play and Stop buttons will be available. If the connection is not successful after a few tries, we can use the Reset button on the Earable device to reset it and try again. After the connection is successful, click on the Play button to start streaming data from the Earable device to the Computer. The window will show that data is being streamed from the device, as shown in Figure 6.
+Click on the Device box and choose the right COM port of the device (each device will have a sticker with a COM port to connect to). Click Apply to close the window. In the main window of the OpenVibe-acquisition-server (Figure 4), click Connect to connect to the NeuralWear device. If the connection is successful, the Play and Stop buttons will be available. If the connection is not successful after a few tries, we can use the Reset button on the NeuralWear device to reset it and try again. After the connection is successful, click on the Play button to start streaming data from the NeuralWear device to the Computer. The window will show that data is being streamed from the device, as shown in Figure 6.
 
 <img width="468" height="151" alt="image" src="https://github.com/user-attachments/assets/839b3621-30a0-4d13-b8b9-0825d0f0c01e" />
 
@@ -84,7 +84,7 @@ Click on the Play button of the OpenVibe-Designer software to start data visuali
 
 *Fig.8: Real-time data streaming*
 
-On the left side, we have 3 boxes to visualise captured EOG (filtered from 0.3 to 10Hz), EMG (filtered from 10 to 100Hz), and EEG (filtered from 0.3 to 25Hz), respectively. On the right side, we have the Motion box to visualise data from the motion sensor and a battery (%) box which shows the current battery percentage of the Earable device.
+On the left side, we have 3 boxes to visualise captured EOG (filtered from 0.3 to 10Hz), EMG (filtered from 10 to 100Hz), and EEG (filtered from 0.3 to 25Hz), respectively. On the right side, we have the Motion box to visualise data from the motion sensor and a battery (%) box which shows the current battery percentage of the NeuralWear device.
 Data collection. While the visualisation is running, the data is being collected and written to files inside the DataCollection folder as well. Open the DataCollection folder; we will see that the collected data is stored in files with the name record-[date-start time].csv. Figure 9 presents an example of the collected data inside the DataCollection folder.
 
 <img width="468" height="165" alt="image" src="https://github.com/user-attachments/assets/3afbd1c3-0cfd-45b3-ba3c-595aabfb9d1b" />
@@ -122,7 +122,7 @@ Before leaving the data collection to run for a long duration, some data quality
 **7.  Data collection.**
 
 At this point, we are ready for long-term data collection. We just need to leave the visualisation window open on the Control Computer. The data will be stored in a file inside the DataCollection folder until we close the visualisation window.
-During the data collection, we should keep track of the battery percentage of the device. When the battery percentage is <10%, we should (1) close the visualization window to save the collected data, (2) disconnect the OpenVibe-acquisition-sever from the Bluetooth of the Earable device, (3) turn off the device, (4) swap the current battery with a fully-charged one, and (5) repeat step the previous steps (we don’t need to open another OpenVibe-acquisition-sever, just click Connect on the current one.).
+During the data collection, we should keep track of the battery percentage of the device. When the battery percentage is <10%, we should (1) close the visualization window to save the collected data, (2) disconnect the OpenVibe-acquisition-sever from the Bluetooth of the NeuralWear device, (3) turn off the device, (4) swap the current battery with a fully-charged one, and (5) repeat step the previous steps (we don’t need to open another OpenVibe-acquisition-sever, just click Connect on the current one.).
 
 
 
