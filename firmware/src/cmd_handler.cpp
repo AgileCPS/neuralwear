@@ -266,7 +266,7 @@ void CommandHandlerTask::cmdUartPrintSel(const Command& cmd, Response& resp) {
     }
     uint8_t sub = cmd.payload[0];
     if (sub == 'o') {
-        g_runtimeState.setOutputMode(OutputMode::IES);
+        g_runtimeState.setOutputMode(OutputMode::UV);
     } else if (sub == 'i') {
         g_runtimeState.setOutputMode(OutputMode::RAW);
     }
@@ -375,7 +375,7 @@ void CommandHandlerTask::cmdSetOutputMode(const Command& cmd, Response& resp) {
         resp.status = CmdStatus::ERR_BAD_PAYLOAD;
         return;
     }
-    OutputMode mode = (cmd.payload[0] == 0) ? OutputMode::RAW : OutputMode::IES;
+    OutputMode mode = (cmd.payload[0] == 0) ? OutputMode::RAW : OutputMode::UV;
 
     // Legacy (OpenVIBE) guard rail: CDriveriES never rescales — it treats
     // every sample as an iES µV integer. Switching to RAW would silently
@@ -434,7 +434,7 @@ void CommandHandlerTask::enforceLegacyDefaults() {
         g_runtimeState.setChannelEnableMask(0b00001100);  // factory default: CH3+CH4
         g_runtimeState.applyToHardware(&ads1299);
     }
-    g_runtimeState.setOutputMode(OutputMode::IES);
+    g_runtimeState.setOutputMode(OutputMode::UV);
 
     // 115200 baud tops out at ~250 SPS × 2ch of iES µV frames. Run the ADC
     // directly at 250 SPS with no decimation, rather than 1 kSPS ÷ DS×4

@@ -59,7 +59,7 @@ void setup() {
     Serial.println();
 
     // Enable verbose ADS1299 driver logging
-    ads1299.verbosity = true;
+    ads1299.verbosity = false;
 
     // Report the persistent-config load result captured above (before Serial
     // was available) — see the reordering note at the top of setup().

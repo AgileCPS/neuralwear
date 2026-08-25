@@ -260,7 +260,7 @@
 // Set to 1 to compile in the corresponding subsystem; 0 excludes it entirely.
 
 #define FEATURE_STREAMING_ENABLE   1   // USB-CDC data streaming
-#define FEATURE_BLE_ENABLE         1
+#define FEATURE_BLE_ENABLE         0
 // Stage 2 sub-gate: 0 = BleChannelTask runs, no ble.init() (safe task bring-up).
 // 1 = ble.init() from BleChannelTask::run() only — never from setup()/loop().
 #define BLE_RADIO_INIT_ENABLE      0

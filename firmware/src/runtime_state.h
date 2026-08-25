@@ -37,12 +37,12 @@ class ADS1299_Library;
 /**
  * @brief EEG output format sent by PacketiserTask.
  *
- * IES  (1): integer µV values (default, iES/OpenVIBE compatible).
+ * UV  (1): integer µV values (default, iES/OpenVIBE compatible).
  * RAW  (0): raw 24-bit ADC counts, pass-through (OpenBCI compatible).
  */
 enum class OutputMode : uint8_t {
     RAW = 0,  ///< Raw ADC counts (OpenBCI compatible)
-    IES = 1   ///< Integer µV (iES/OpenVIBE compatible, default)
+    UV = 1   ///< Integer µV (iES/OpenVIBE compatible, default)
 };
 
 

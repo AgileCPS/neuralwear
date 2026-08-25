@@ -234,7 +234,7 @@ WireFrame PacketiserTask::serialiseEeg(const ADS1299_4_Sample& s) {
         if (chIdx >= RuntimeState::NUM_CHANNELS) chIdx = 0;
 
         int32_t value;
-        if (mode == OutputMode::IES) {
+        if (mode == OutputMode::UV) {
             // Convert raw ADC to integer µV using per-channel gain.
             // ADS1299 gain register codes: bits[6:4] encode gain index 0–6.
             //   0x00=×1  0x10=×2  0x20=×4  0x30=×6  0x40=×8  0x50=×12  0x60=×24

@@ -120,7 +120,7 @@ void PersistentConfig::writeLayout(const EepromLayout& layout) {
 void PersistentConfig::populateDefaults(EepromLayout& layout) {
     layout.magic               = PERSISTENT_CONFIG_MAGIC;
     layout.schema_version      = PERSISTENT_CONFIG_SCHEMA_VERSION;
-    layout.output_mode         = (uint8_t)OutputMode::IES;   // µV integers
+    layout.output_mode         = (uint8_t)OutputMode::UV;   // µV integers
     layout.sample_rate         = (uint8_t)ADS1299_Library::SAMPLE_RATE_1000;
     layout.downsampling_factor = 4;                           // 1 kSPS ÷ 4 = 250 SPS
     layout.channel_gain[0]     = ADS_GAIN01;

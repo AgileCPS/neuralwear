@@ -36,7 +36,7 @@ void RuntimeState::initialize() {
     }
 
     _sampleRate           = (uint8_t)ADS1299_Library::SAMPLE_RATE_1000;  // 1 kSPS — iES default
-    _outputMode           = OutputMode::IES; // µV integers — iES/OpenVIBE compatible
+    _outputMode           = OutputMode::UV; // µV integers — iES/OpenVIBE compatible
     _channelEnableMask    = 0b00001100;      // CH3+CH4 only (bit2+bit3)
     _streamingEnabled     = false;
     _downsamplingFactor   = 4;               // 1000 SPS ÷ 4 = 250 SPS over-the-wire
