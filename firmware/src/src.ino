@@ -30,19 +30,14 @@ void setup() {
     // Initialize Nicla Voice system (enables VDDIO_EXT 3.3V)
     nicla::begin();
 
-    // ── Load persistent config BEFORE starting Serial ───────────────────────
-    // Must happen first so the persisted HostProtocolMode (runtime_state.h)
-    // picks the correct boot baud below — a unit left in OPENVIBE mode must
-    // come up at SERIAL_BAUD_OPENVIBE, not the modern default. PersistentConfig
-    // only touches FlashIAP, so it has no Serial dependency; the diagnostic
-    // messages are simply deferred until after Serial.begin() (see below).
+    // Turn on heartbeat LED (green) to indicate setup() is running
+    nicla::leds.begin();
+    nicla::leds.setColor(green);
 
-    // bool configLoadedFromEeprom = PersistentConfig::load(g_runtimeState);
     g_runtimeState.initialize();
-    bool configLoadedFromEeprom = false;
     uint32_t bootBaud = g_runtimeState.isOpenVibeMode() ? SERIAL_BAUD_OPENVIBE : SERIAL_BAUD_MODERN;
 
-    // Start USB serial (wait for connection up to timeout)
+    // Start serial (wait for connection up to timeout)
     Serial.begin(bootBaud);
     {
         unsigned long startMs = millis();
@@ -51,43 +46,17 @@ void setup() {
         }
     }
 
-    Serial.println();
-    Serial.println("=== NICLA EEG Firmware - Multi-Task Architecture ===");
-    Serial.println("Architecture: firmware_architecture.md");
-    Serial.print("Host protocol mode: ");
-    Serial.println(g_runtimeState.isOpenVibeMode() ? "OPENVIBE (115200 baud)" : "MODERN (460800 baud)");
-    Serial.println();
-
-    // Enable verbose ADS1299 driver logging
+    // Disable verbose ADS1299 driver logging
     ads1299.verbosity = false;
 
-    // Report the persistent-config load result captured above (before Serial
-    // was available) — see the reordering note at the top of setup().
-    if (!configLoadedFromEeprom) {
-        Serial.println("[CONFIG] EEPROM invalid or missing — factory defaults loaded.");
-    } else {
-        Serial.println("[CONFIG] Loaded from EEPROM.");
-    }
-    Serial.println();
-
     // Turn on battery charging (if USB connected) — Nicla System library handles the rest.
-    Serial.println("Turning on battery charging at 200 mA (if USB connected).");
     nicla::enableCharging(200);  // 200 mA charge current
 
     // Initialize ADS1299 (SPI, reset, register config)
-    Serial.println("Initialising ADS1299 ...");
     ads1299.initialize();
-    Serial.println("Initialisation complete.");
-    Serial.println();
 
     // Read and verify device ID
-    Serial.println("Reading device ID ...");
     byte id = ads1299.ADS_getDeviceID(BOARD_ADS);
-
-    Serial.print("Device ID read: 0x");
-    Serial.println(id, HEX);
-    Serial.println();
-
     if (id != EXPECTED_ID) {
         Serial.print("FAIL: Unexpected device ID 0x");
         Serial.print(id, HEX);
@@ -104,21 +73,19 @@ void setup() {
         Serial.println("  • 0x00 usually means MISO is stuck low.");
         Serial.println();
         Serial.println("Streaming not started — fix hardware first.");
-        return;  // stay in setup(); loop() will just blink LED
-    }
 
-    Serial.print("PASS: ADS1299 identified correctly (expected 0x");
-    Serial.print(EXPECTED_ID, HEX);
-    Serial.println(").");
-    Serial.println();
+        nicla::leds.setColor(red);  // Red LED indicates error
+        nicla::leds.end();
+        while(1);
+    }
 
     // Apply sample rate from PersistentConfig (loaded above); factory default is 1 kSPS.
     eegAcquisitionTask.setSampleRate(
         (ADS1299_Library::SAMPLE_RATE)g_runtimeState.getSampleRate());
-    Serial.print("Sample rate configured: ");
-    Serial.print(eegAcquisitionTask.getSampleRate());
-    Serial.println(" SPS");
-    Serial.println();
+    // Serial.print("Sample rate configured: ");
+    // Serial.print(eegAcquisitionTask.getSampleRate());
+    // Serial.println(" SPS");
+    // Serial.println();
 
     // ── Apply persistent config to ADS1299 hardware ─────────────────────────
     // Sets channel power-down bits and gain registers from g_runtimeState.
@@ -138,12 +105,10 @@ void setup() {
     g_runtimeState.applyToHardware(&ads1299);
     Serial.println("Channel routing: Internal test signal (DEBUG_ENABLE — all channels).");
     #else
-    Serial.println("Channel routing: Analog, CH3+CH4 active; CH1+CH2 powered down (production).");
+    // Serial.println("Channel routing: Analog, CH3+CH4 active; CH1+CH2 powered down (production).");
     #endif  // DEBUG_ENABLE
 
     // Wire tasks together (subscription pattern)
-    Serial.println("Wiring task architecture ...");
-    
     // EegAcquisitionTask → PacketiserTask (EEG samples)
     eegAcquisitionTask.subscribe(packetiserTask.getEegQueue());
     
@@ -166,62 +131,34 @@ void setup() {
     // CommandHandlerTask → PacketiserTask (responses)
     cmdHandlerTask.setResponseQueue(packetiserTask.getResponseQueue());
     
-    Serial.println("Task wiring complete.");
-    Serial.println();
-
     // Attach DRDY interrupt (pin 11, falling edge)
-    ads1299.verbosity = false;
     pinMode(ADS_DRDY_PIN, INPUT);
     attachInterrupt(digitalPinToInterrupt(ADS_DRDY_PIN), DRDY_ISR, FALLING);
-    Serial.println("DRDY interrupt attached on pin 11 (FALLING edge).");
+    // Serial.println("DRDY interrupt attached on pin 11 (FALLING edge).");
 
     // Start tasks (lowest to highest priority)
-    Serial.println("Starting tasks ...");
+    // Serial.println("Starting tasks ...");
     
     cmdHandlerTask.start();
-    Serial.println("  [1/6] CommandHandlerTask started (priority: Normal)");
+    // Serial.println("  [1/6] CommandHandlerTask started (priority: Normal)");
     
     gatewayTask.start();
-    Serial.println("  [2/6] GatewayTask started (priority: Normal)");
+    // Serial.println("  [2/6] GatewayTask started (priority: Normal)");
 
 #if FEATURE_BLE_ENABLE
     bleChannelTask.start();
-    Serial.println("  [3/6] BleChannelTask started (priority: Normal)");
+    // Serial.println("  [3/6] BleChannelTask started (priority: Normal)");
 #endif
     
     uartChannelTask.start();
-    Serial.println("  [4/6] UartChannelTask started (priority: Normal)");
+    // Serial.println("  [4/6] UartChannelTask started (priority: Normal)");
     
     packetiserTask.start();
-    Serial.println("  [5/6] PacketiserTask started (priority: AboveNormal)");
+    // Serial.println("  [5/6] PacketiserTask started (priority: AboveNormal)");
     
     eegAcquisitionTask.start();
-    Serial.println("  [6/6] EegAcquisitionTask started (priority: Realtime)");
-    
-    Serial.println();
-    Serial.println("All tasks started successfully.");
-    Serial.println();
-
-    // Streaming always starts on explicit CMD_START_STREAMING ('b').
-    // DEBUG_ENABLE only gates debug logging — do NOT auto-start here.
-    // Auto-starting would fill the USB CDC TX buffer with EEG frames,
-    // saturating availableForWrite() so that debugTryPrint() silently
-    // drops all debug messages, and delaying command responses behind
-    // the EEG frame backlog (~1.5 s per command).
-    Serial.println("ADS1299 ready. Send 'b' to start streaming.");
-#ifdef DEBUG_ENABLE
-    Serial.println("System ready. Debug logging ENABLED.");
-#else
-    Serial.println("System ready. Waiting for stream-start command.");
-#endif
-    Serial.println("========================================");
-#if FEATURE_BLE_ENABLE
-    Serial.println("[BLE] Stage 2: init deferred to BleChannelTask::run()");
-#if !BLE_RADIO_INIT_ENABLE
-    Serial.println("[BLE] Radio OFF (BLE_RADIO_INIT_ENABLE=0) — task bring-up only");
-#endif
-#endif
-    Serial.println();
+    // Serial.println("  [6/6] EegAcquisitionTask started (priority: Realtime)");
+    // Serial.println("ADS1299 ready. Send 'b' to start streaming.");
 }
 
 void loop() {
@@ -241,7 +178,7 @@ void loop() {
         lastToggleMs = now;
         ledOn        = !ledOn;
         nicla::leds.begin();
-        nicla::leds.setColor(ledOn ? red : off);
+        nicla::leds.setColor(ledOn ? green : off);
         nicla::leds.end();
     }
 
