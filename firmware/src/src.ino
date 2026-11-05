@@ -50,7 +50,7 @@ void setup() {
     ads1299.verbosity = false;
 
     // Turn on battery charging (if USB connected) — Nicla System library handles the rest.
-    nicla::enableCharging(200);  // 200 mA charge current
+    nicla::enableCharging(300);  // 300 mA charge current (BQ25120A maximum)
 
     // Initialize ADS1299 (SPI, reset, register config)
     ads1299.initialize();
