@@ -1,6 +1,6 @@
 # ADS1299 Library Reference (Nicla Voice Port)
 
-This document explains the relevant ADS1299 library functions in firmware/ADS1299NiclaFW/ADS1299_Library.cpp and how they map to console output.
+This document explains the relevant ADS1299 library functions in firmware/src/ADS1299_Library.cpp and how they map to console output.
 
 Scope:
 
@@ -279,7 +279,7 @@ MISC1, 0x15, 0x00
 
 Use the current file in your workspace:
 
-test/SPI_Test/ADS1299_Library.cpp
+firmware/src/ADS1299_Library.cpp
 
 ---
 

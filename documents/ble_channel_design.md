@@ -3,7 +3,6 @@
 **Platform:** Arduino Nicla Voice (nRF52832), Mbed OS 6, ADS1299-4 EEG Frontend  
 **Target Throughput:** 1000 Samples Per Second (1 kSPS)  
 **Document Status:** Design blueprint — **BLE not yet implemented** (`ble_channel.cpp` contains placeholder stubs)  
-**Prerequisites (2026-07-04):** UART path fully validated @ 460800 baud (all four host test scripts pass). **Stage 1** (§9.2) is the next firmware milestone.
 
 ---
 
@@ -21,14 +20,14 @@ See `firmware_architecture.md` Section 8.2 for the full pipeline data flow diagr
 
 BLE-specific notes:
 - `BleChannelTask` is a **pure transport pump** — it receives pre-serialised `WireFrame` objects from `GatewayTask` and aggregates their raw bytes into BLE notifications. It has no knowledge of IES framing.
-- `BLE_TX_QUEUE_SIZE = 10` in `config.h` is a **placeholder** that must be updated to **128** before streaming is enabled (see Section 5.1 for the derivation).
+- `BLE_TX_QUEUE_SIZE = 128` in `config.h` (128 ms headroom at 1 kSPS; see Section 5.1 for the derivation).
 - `BleChannelTask` priority is `osPriorityNormal (0)` — must match `GatewayTask` (producer) per the consumer ≥ producer priority rule (see Section 5.2).
 
 ### 1.3 BLE-Relevant Data Sizes
 
 For full struct definitions (`ADS1299_4_Sample`, `WireFrame`, IES wire format) see `firmware_architecture.md` Sections 8.1 and 8.2.
 
-**WireFrame: `sizeof = 21 B` always, but only `frame.len` bytes are transmitted OTA.** The struct carries a fixed-size buffer (`bytes[IES_MAX_FRAME_SIZE=20]`) for zero-heap-allocation queue slots; `len` tags how many bytes are actually valid:
+**WireFrame: `sizeof = 22 B` always, but only `frame.len` bytes are transmitted OTA.** The struct carries a fixed-size buffer (`bytes[IES_MAX_FRAME_SIZE=20]`) for zero-heap-allocation queue slots; `len` tags how many bytes are actually valid:
 
 | Frame type | OTA bytes (`frame.len`) | bytes[] unused per slot |
 |---|---|---|
@@ -39,27 +38,27 @@ For full struct definitions (`ADS1299_4_Sample`, `WireFrame`, IES wire format) s
 This distinction matters for BLE TX queue RAM sizing — the queue is allocated on struct size, not OTA size:
 
 ```
-BLE_TX_QUEUE_SIZE × sizeof(WireFrame) = N × 21 bytes
-  At N=10  (current placeholder): 210 B    ← overflows on first 30 ms CI gap
-  At N=64  (minimum safe):        1,344 B
-  At N=128 (recommended):         2,688 B  ← 128 ms headroom at 1 kSPS
+BLE_TX_QUEUE_SIZE × sizeof(WireFrame) = N × 22 bytes
+  At N=64  (minimum safe):        1,408 B
+  At N=128 (current, recommended): 2,816 B  ← 128 ms headroom at 1 kSPS
 ```
 
 At 1 kSPS with 1 Hz TIME_SYNC: average OTA throughput ≈ **16 kB/s (128 kbps)**.
 
-### 1.4 Current Implementation State (updated 2026-06-19)
+### 1.4 Current Implementation State (updated 2026-07-04)
 
 | Component | Status |
 |---|---|
 | UART command TX/RX, PacketiserTask, GatewayTask | ✅ Implemented and tested |
-| `CMD_ENABLE_BLE` (0x21) | ⚠️ Stub — toggles flag only |
-| `ble_channel.h` / `ble_channel.cpp` | ❌ Stub — `run()` sleeps indefinitely |
-| BLE stack init, GATT service | ❌ Not started |
-| `BLE_TX_QUEUE_SIZE` in `config.h` | ⚠️ Placeholder **10** — must be **128** before streaming (§5.1) |
-| `FrameDest::BLE` routing in GatewayTask | ❌ Not wired |
+| `CMD_ENABLE_BLE` (0x21) | ✅ Implemented — toggles GatewayTask BLE routing flag |
+| `ble_channel.h` / `ble_channel.cpp` — Stage 2 GATT service | ✅ Implemented (disabled by `FEATURE_BLE_ENABLE = 0`) |
+| BLE stack init (`BLE_RADIO_INIT_ENABLE`) | ⚠️ Code written; disabled by `BLE_RADIO_INIT_ENABLE = 0` |
+| TX aggregation loop in `BleChannelTask::run()` | ❌ Not implemented — `run()` sleeps indefinitely |
+| `BLE_TX_QUEUE_SIZE` in `config.h` | ✅ Set to **128** |
+| `FrameDest::BLE` routing in GatewayTask | ✅ Wired (typed `_bleTxQueue` pointer, unicast `switch(pkt.dest)`) |
 | Bonding / passkey / whitelist | ❌ Designed only (§3.4, Stage 5+) |
 
-**Next coding work:** `ble_channel_design.md` §9.2 Stage 1 — shared `WireFrame` routing fixes and `BLE_TX_QUEUE_SIZE` resize, then Stage 2 BLE stack init.
+**Next coding work:** `ble_channel_design.md` §9.2 Stage 3 — TX aggregation loop in `BleChannelTask::run()`, then Stage 4 RX path.
 
 ---
 
@@ -93,7 +92,7 @@ This is an **18.75% payload efficiency** at 16-byte payloads with the default 20
 
 The BLE radio does not transmit continuously. It sleeps between **Connection Events** and only wakes during the negotiated **Connection Interval (CI)**. During each CI, the Central and Peripheral exchange one or more PDUs.
 
-At a typical CI of **7.5 ms** (minimum), up to 7 frames accumulate before the radio wakes. At **30 ms** (common on mobile operating systems), 30 frames accumulate per CI. With a queue depth of `BLE_TX_QUEUE_SIZE = 10`, the queue overflows before the first CI:
+At a typical CI of **7.5 ms** (minimum), up to 7 frames accumulate before the radio wakes. At **30 ms** (common on mobile operating systems), 30 frames accumulate per CI. The required queue depth is derived below (`BLE_TX_QUEUE_SIZE = 128`):
 
 ```
 Overflow condition:
@@ -137,7 +136,7 @@ Payload efficiency rises from 18.75% (single 16-byte frame) to **98.4%** (240 us
 | Notifications/s | 1,000 | ~67 |
 | Payload efficiency | 18.75% | 98.4% |
 | Required queue depth | 1 | 128 |
-| RAM for queue (WireFrame, 21 B) | 21 B | 2,688 B |
+| RAM for queue (WireFrame, 22 B) | 22 B | 2,816 B |
 | Viable for 1 kSPS? | No | Yes |
 
 ---
@@ -168,7 +167,7 @@ These are constraints imposed by the existing codebase design that must be honou
 
 4. **`GatewayTask` fans out to all registered channel subscribers.** The `BleChannelTask::getTxQueue()` pointer must be registered with `GatewayTask` via `addSubscriber()` at startup — same pattern as `UartChannelTask`.
 
-5. **Priority rule from `config.h`:** "The consumer must be >= producer priority to keep queues drained." `GatewayTask` is `osPriorityNormal (0)`, so `BleChannelTask` must be `osPriorityNormal (0)` or higher. The current `ble_channel.cpp` placeholder uses `osPriorityBelowNormal (-1)` and `config.h` defines `TASK_PRIORITY_BLE = osPriorityNormal (0)`. **The task must use `TASK_PRIORITY_BLE` and `STACK_SIZE_BLE` from `config.h`**, not hardcoded values — see Section 6 for required fixes.
+5. **Priority rule from `config.h`:** "The consumer must be >= producer priority to keep queues drained." `GatewayTask` is `osPriorityNormal (0)`, so `BleChannelTask` must be `osPriorityNormal (0)` or higher. `config.h` defines `TASK_PRIORITY_BLE = osPriorityNormal (0)` and `STACK_SIZE_BLE = 4096`. The `ble_channel.cpp` constructor already uses `TASK_PRIORITY_BLE` and `STACK_SIZE_BLE` from `config.h` (Stage 2 fix applied).
 
 ### 3.3 Derived Requirements
 
@@ -352,7 +351,7 @@ BLE EventQueue thread      ← BLE callbacks fire here (EventHandler methods)
 BleChannelTask thread      ← sleepUntilNotified() / queue pop loop
 ```
 
-**EventQueue thread setup** (in `ADS1299NiclaFW.ino` or `BleChannelTask::initBle()`):
+**EventQueue thread setup** (in `src.ino` or `BleChannelTask::initBle()`):
 
 ```cpp
 events::EventQueue ble_event_queue;
@@ -577,32 +576,27 @@ The following changes must be made before BLE streaming is enabled:
 ### 6.1 `config.h`
 
 ```cpp
-// CHANGE:
-#define BLE_TX_QUEUE_SIZE         10    // ← placeholder
-
-// TO:
-#define BLE_TX_QUEUE_SIZE        128    // 128 ms headroom at 1 kSPS
-
-// VERIFY (already correct, do not change):
-#define TASK_PRIORITY_BLE     osPriorityNormal   // must be ≥ GatewayTask priority
-#define STACK_SIZE_BLE        4096               // Cordio needs ~1.5 KB internal stack
+// Already correct — no changes required:
+#define BLE_TX_QUEUE_SIZE        128    // 128 ms headroom at 1 kSPS ✅
+#define TASK_PRIORITY_BLE     osPriorityNormal   // must be ≥ GatewayTask priority ✅
+#define STACK_SIZE_BLE        4096               // Cordio needs ~1.5 KB internal stack ✅
 ```
 
 ### 6.2 `ble_channel.cpp` constructor
 
-```cpp
-// CHANGE:
-BleChannelTask::BleChannelTask()
-    : BaseTask(osPriorityBelowNormal, 2048),   // ← wrong priority, hardcoded stack
+Already correct — no changes required:
 
-// TO:
+```cpp
+// Already applied (Stage 2):
 BleChannelTask::BleChannelTask()
-    : BaseTask(TASK_PRIORITY_BLE, STACK_SIZE_BLE),   // ← from config.h
+    : BaseTask(TASK_PRIORITY_BLE, STACK_SIZE_BLE),   // ✅ from config.h
+      ...
+{
+    _txQueue.setOwner(this);   // ✅ enables sleepUntilNotified() wakeup
+}
 ```
 
-Add `_txQueue.setOwner(this);` in the constructor body.
-
-### 6.3 `ADS1299NiclaFW.ino` — startup registration
+### 6.3 `src.ino` — startup registration
 
 ```cpp
 // Register BleChannelTask with GatewayTask (same pattern as UART):
@@ -648,7 +642,7 @@ assume read boundaries align with frame boundaries.
 
 1. Iterate over the received byte array sequentially.
 2. Locate the `[0xA0]` start byte.
-3. Read `type_ch` byte (offset +2) to determine frame type and length.
+3. Read the third byte. Its high 4 bits are the frame type and its low 4 bits are the count; together they give the frame length (see `firmware_architecture.md` Q9).
 4. Locate the `[0xC0]` stop byte at the expected end offset.
 5. Validate and extract the frame payload.
 6. Repeat from step 2 with the remaining bytes.
@@ -659,11 +653,7 @@ assume read boundaries align with frame boundaries.
 
 The Central must not use BLE arrival times for EEG sample timestamps (BLE arrival time jitter = ±CI/2 = ±7.5–15 ms, which is unusable for EEG analysis).
 
-**Protocol:** The `PacketiserTask` emits a `TIME_SYNC` frame at 1 Hz:
-```
-[0xA0][cnt][0x71][ts_us 4B BE][sample_cnt 4B BE][0xC0]  = 12 B
-```
-Type nibble = **7** (not 5 — reassigned in Phase 4 to avoid collision with iES EDA/BATT_INFO types; see `dev_log.md` decision log 2026-06). Both `ts_us` and `sample_cnt` are **big-endian** as of Phase 4.
+**Protocol:** `PacketiserTask` emits a time-sync frame once per second. It is 12 bytes: `0xA0`, a frame counter, `0x71`, microseconds since boot as 4 bytes with the most significant byte first, the sample counter as 4 bytes in the same order, then `0xC0`. The third byte is type 7 in the high 4 bits and a count of 1 in the low 4 bits. The full frame layout, including EEG and response frames, is in `firmware_architecture.md` Q9.
 
 The Central maintains a running linear interpolator:
 ```
@@ -757,7 +747,7 @@ struct WireFrame {
     FrameDest dest;                       //  1 B — unicast routing target
     uint8_t   bytes[IES_MAX_FRAME_SIZE];  // 20 B — IES wire bytes
 };
-// sizeof = 22 B (was 21 B — +1 B for dest field)
+// sizeof = 22 B
 ```
 
 **Active transport rule:** The device operates in one of three states: **UART-only**, **BLE-only**, or **idle**. `_uartEnabled` and `_bleEnabled` are **mutually exclusive** at runtime (`CMD_ENABLE_UART` / `CMD_ENABLE_BLE` or equivalent). Packetiser never emits a frame without a single explicit `dest`.
@@ -802,10 +792,10 @@ The gateway does not re-check enable flags for data frames — `dest` is authori
 **Impact on queue RAM:**
 
 ```
-BLE_TX_QUEUE_SIZE × sizeof(WireFrame) = 128 × 22 B = 2,816 B  (was 2,688 B; +128 B)
+BLE_TX_QUEUE_SIZE × sizeof(WireFrame) = 128 × 22 B = 2,816 B
 ```
 
-Wiring in `ADS1299NiclaFW.ino`:
+Wiring in `src.ino`:
 ```cpp
 // Replace:
 gatewayTask.setUartChannel(uartChannelTask.getTxQueue());
@@ -837,13 +827,12 @@ The implementation is divided into five sequential stages. Each stage is indepen
 
 **Why replace `_channelSubscribers` vector with typed pointers:** The gateway must push to `_uartTxQueue` or `_bleTxQueue` based on `pkt.dest` — no fan-out vector.
 
-**Files:** `packetiser.h`, `packetiser.cpp`, `gateway.h`, `gateway.cpp`, `config.h`, `ADS1299NiclaFW.ino`
+**Files:** `packetiser.h`, `packetiser.cpp`, `gateway.h`, `gateway.cpp`, `config.h`, `src.ino`
 
 1. Add `FrameDest` enum (`UART`, `BLE` only — no `ALL`) and `dest` field to `WireFrame` in `packetiser.h` (see §9.1.2).
 2. Add `activeStreamDest()` helper; update all four `serialise*()` methods to set explicit `f.dest`.
-3. Refactor `GatewayTask` to typed `_uartTxQueue`/`_bleTxQueue` pointers and unicast `switch (pkt.dest)` routing. Remove `_channelSubscribers` vector.
 4. Enforce mutual exclusivity of `_uartEnabled`/`_bleEnabled` when switching transport.
-5. Update `ADS1299NiclaFW.ino` wiring to use `setUartChannel()` / `setBleChannel()`.
+5. Update `src.ino` wiring to use `setUartChannel()` / `setBleChannel()`.
 6. Update `config.h`: set `BLE_TX_QUEUE_SIZE = 128`.
 
 **Verification:** Upload and confirm UART streaming unaffected. Confirm enabling BLE transport stops UART data output (and vice versa) — never both at once.
@@ -868,7 +857,7 @@ The implementation is divided into five sequential stages. Each stage is indepen
    - Create the GATT service with TX (notify, 244 B max) and RX (write, 20 B max) characteristics
    - Set device name and appearance
    - Start advertising
-4. Add the BLE EventQueue thread setup to `ADS1299NiclaFW.ino` (see §6.3).
+4. Add the BLE EventQueue thread setup to `src.ino` (see §6.3).
 
 **Verification:** Connect with nRF Connect app. Confirm service appears, TX characteristic is notifiable, RX characteristic is writable. No data streaming yet — just confirm GATT structure is correct.
 
@@ -889,7 +878,7 @@ The implementation is divided into five sequential stages. Each stage is indepen
 1. Implement `dispatchBuffer()` with `BLE_ERROR_NO_MEM` retry loop (§5.5). Use `rtos::ThisThread::yield()` initially as the backpressure primitive; upgrade to `_txDrainSemaphore` once `onDataSent()` is wired.
 2. Implement `run()` aggregation loop (§5.4): `sleepUntilNotified()` idle, drain `_txQueue`, aggregate into `tx_buffer[244]`, call `dispatchBuffer()`.
 3. Track negotiated MTU via `onAttMtuChange()` callback; store in `_currentMtu` (default = 20 until negotiated).
-4. Wire `setBleChannel()` in `ADS1299NiclaFW.ino` and start `bleChannelTask`.
+4. Wire `setBleChannel()` in `src.ino` and start `bleChannelTask`.
 
 **Verification:** Connect, start streaming. Confirm notifications arrive at ~67/s (not 1000/s). Use nRF Connect or a Python script to count notifications per second and measure payload size. Confirm no drops in `droppedCount()` on `_txQueue`.
 
@@ -906,7 +895,7 @@ The implementation is divided into five sequential stages. Each stage is indepen
 **Files:** `ble_channel.cpp`
 
 1. Implement `feedRxByte()` IES frame boundary state machine (mirror `UartChannelTask::processRx()`): detect `[0xA0]` start, accumulate bytes, detect `[0xC0]` stop, construct `Command` with `source = CmdSource::BLE`, push to `_cmdOutputQueue`.
-2. Wire `bleChannelTask.setCmdOutputQueue(gatewayTask.getBleCommandQueue())` in `ADS1299NiclaFW.ino`.
+2. Wire `bleChannelTask.setCmdOutputQueue(gatewayTask.getBleCommandQueue())` in `src.ino`.
 3. Wire `onDataSent()` → `_txDrainSemaphore.release()` (upgrade from `yield()` in Stage 3).
 
 **Verification:** Send a START command from nRF Connect RX characteristic. Confirm acquisition starts. Send STOP. Confirm response frame arrives back on the BLE TX characteristic only (not on UART). Confirm UART path is unaffected.

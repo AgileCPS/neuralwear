@@ -1,7 +1,5 @@
 # EEG Firmware Architecture — Arduino NICLA Voice + ADS1299 Shield
 
-**Document status:** Draft v0.5 — Section 12 updated: corrected gain default, RuntimeState file names, added OutputMode and PersistentConfig (Section 12.4)  
-**Last updated:** 2026-05-09  
 **Note:** Task-based architecture with Gateway communication hub and Publisher/Subscriber pattern
 
 ---
@@ -117,12 +115,12 @@ This document specifies the firmware architecture for a real-time EEG acquisitio
 | ID | Requirement | Priority | Status |
 |----|-------------|----------|--------|
 | FR-01 | Continuously sample ADS1299 at configured ODR via DRDY interrupt | MUST | Defined |
-| FR-02 | Send periodic time sync packets to enable host-side timestamp reconstruction | MUST | Q2 open |
+| FR-02 | Send periodic time sync packets to enable host-side timestamp reconstruction | MUST | Resolved |
 | FR-03 | Distribute samples to all subscribers via `distribute()` — never waits for queue space; drop-oldest on overflow | MUST | Defined |
 | FR-04 | Drop oldest sample on FIFO overflow; track dropped count | MUST | Defined |
 | FR-05 | Stream raw EEG data over UART (Phase 2) and BLE (future) | MUST | In progress |
 | FR-06 | Run ML inference on NDP120 concurrently with acquisition | MUST | Q6 open |
-| FR-07 | Accept commands over USB Serial (UART) | MUST | Q13 open |
+| FR-07 | Accept commands over USB Serial (UART) | MUST | Resolved |
 | FR-08 | Accept commands over BLE (control channel) | MUST | Q10-Q11 open |
 | FR-09 | All system parameters configurable in single `config.h` | MUST | Defined |
 | FR-10 | Task priorities configurable via `config.h` | MUST | Resolved |
@@ -130,7 +128,7 @@ This document specifies the firmware architecture for a real-time EEG acquisitio
 | FR-12 | Gateway validates incoming commands (lightweight check) | MUST | Defined |
 | FR-13 | Gateway prioritizes command responses over streaming data | MUST | Defined |
 | FR-14 | PacketiserTask serialises each input item (EEG, Response, ML) to IES wire format individually; priority order: Response > EEG > ML | MUST | Resolved |
-| FR-15 | UART and BLE share identical command vocabulary | SHOULD | Q13 open |
+| FR-15 | UART and BLE share identical command vocabulary | SHOULD | Resolved |
 | FR-16 | Channel tasks handle protocol-specific framing independently | MUST | Defined |
 | FR-17 | FIFO overflow count and dropped count queryable at runtime | SHOULD | Defined |
 | FR-18 | Publisher/subscriber relationships configurable at startup | MUST | Defined |
@@ -142,7 +140,7 @@ This document specifies the firmware architecture for a real-time EEG acquisitio
 | **BLE throughput** | Must accommodate highest ADS1299 ODR (16 kSPS) for raw data per channel | ✅ Q5 RESOLVED: Design for max, test at 1000 SPS |
 | **ADS1299 ODR** | Design capacity: 16 kSPS (max); Default: 1000 SPS | ✅ **Q5 RESOLVED** |
 | **Channel coexistence** | BLE data and control channels must not starve each other | Resolved (Q3) |
-| **Packet format** | Frame format for EEG/ML/command packets | **Q9 OPEN** |
+| **Packet format** | Frame format for EEG/ML/command packets | **Resolved** (EEG=type 0, Response=type 6, TIME_SYNC=type 7, ML=type 8) |
 
 **Throughput calculation dependencies:**
 - Q5 (ADS1299 ODR) ✅ RESOLVED: Designed for 16 kSPS max (320 kB/s struct); default 1000 SPS (20 kB/s)
@@ -171,9 +169,7 @@ This document specifies the firmware architecture for a real-time EEG acquisitio
 | **EEG Frontend** | ADS1299 (4-channel, 24-bit) | Hardware SPI | Custom shield for NICLA Voice |
 | **ML Processor** | NDP120 | On-board | Neural Decision Processor |
 | **BLE Radio** | nRF52832 (built-in) | BLE 5.0 | Shared with MCU |
-| **Debug/Control** | USB Serial (CDC) | UART | 921600 baud (Q12 resolved; 1 Mbaud caused Windows CDC corruption) |
-| **Reference Code (Primary)** | iES_v0.3-master | TI-RTOS | `code_references/iES_v0.3-master/` (ADS1299 driver, FIFO queue) |
-| **Reference Code (Secondary)** | OpenBCI_8 | Arduino | `code_references/OpenBCI_8/` (ADS1299 register definitions) |
+| **Debug/Control** | USB Serial (CDC) | UART | 460800 baud MODERN default / 115200 baud Legacy/OpenVIBE mode (Q12 resolved; 1 Mbaud caused Windows CDC corruption) |
 
 ### 3.2 Pin Assignments
 
@@ -212,7 +208,7 @@ All pin assignments are defined in `pinDef.h`:
 | **Q1** | CH2 channel configuration | ✅ CH2 is EEG-capable but not used; powered down to reduce noise |
 | **Q5** | ADS1299 output data rate (ODR) | ✅ Design for 16 kSPS max capacity; default 1000 SPS for testing |
 | **Q7** | FIFO queue depths | ✅ Defined in `config.h`: STREAMING=64, EEG_BLE=64, EEG_ML=32 |
-| **Q12** | Debug output transport | ✅ USB CDC Serial at 921600 baud (1 Mbaud caused data corruption on Windows) |
+| **Q12** | Debug output transport | ✅ USB CDC Serial — 460800 baud (MODERN default) / 115200 baud (Legacy/OpenVIBE mode); runtime-switchable via `CMD_SET_HOST_MODE` (1 Mbaud caused data corruption on Windows) |
 | **Q14** | Thread stack sizes | ✅ Defined in `config.h` for each task |
 | **Q16** | SPI pin assignments | ✅ CS=6, MISO=7, MOSI=8, SCK=9 (see Section 3.2) |
 | **Q17** | Role of loop() | ✅ Empty or minimal background work; all real work in RTOS tasks |
@@ -236,20 +232,12 @@ Each item below blocks specific implementation modules. Questions are annotated 
 ---
 
 #### Q2 — Time Sync Packet Interval
-**Status:** 🔴 OPEN  
-**Blocks:** `PacketiserTask`, TIME_SYNC frame generation, packet format (Q9)  
-**Question:** How often should the system send time sync packets? Options:
-- Every N samples (e.g., every 250 samples = 1 second @ 250 SPS)
-- Every T milliseconds (e.g., every 1000ms)
-- On-demand only (host requests via command)
+**Status:** ✅ **RESOLVED**  
+**Decision:** `TIME_SYNC_INTERVAL_MS = 1000` defined in `packetiser.cpp` — one TIME_SYNC frame emitted every 1 second.
 
-**Design rationale:** Following iES firmware pattern (`IES_TIME_SYNC 't'` command), use periodic time sync packets instead of per-sample timestamps. This significantly reduces data overhead:
-- **Per-sample timestamps:** 4 bytes × 16,000 samples/s = 64 KB/s overhead @ max rate
-- **Periodic sync packets:** ~10 bytes/s @ 1 Hz sync rate
-- Host reconstructs timestamps: `timestamp = last_sync_time + ((sample_number - sync_sample_number) × sample_period)`
-
-**Impact:** Time sync packets contain `uint32_t timestamp_us` (microseconds since boot) and `uint32_t sample_counter` (current value of the global sample counter).  
-**Recommendation:** Send time sync packet every 1 second (configurable in `config.h`). Host can reconstruct sample timestamps with <1µs error accumulation between syncs.
+The time-sync frame is 12 bytes: start, frame counter, `0x71`, microseconds since boot (4 bytes, most significant byte first), sample counter (4 bytes, same order), stop. Full layout in Q9.  
+Host reconstructs sample timestamps: `timestamp_us = sync_ts_us + (sample_number − sync_sample_cnt) × (1_000_000 / SPS)`.  
+TIME_SYNC is suppressed in Legacy/OpenVIBE mode (OpenVIBE's parser does not handle type-7 frames).
 
 ---
 
@@ -306,37 +294,77 @@ Each item below blocks specific implementation modules. Questions are annotated 
 ---
 
 #### Q9 — BLE / UART Packet Frame Format
-**Status:** ⚠️ PARTIALLY RESOLVED  
-**Blocks:** `packetiser.h/.cpp` (Response and ML frames), `ble_channel.h/.cpp`
+**Status:** ✅ **RESOLVED**
 
-**Resolved — EEG and TIME_SYNC frames:** IES native format adopted (see `ies_message_protocol.md` Section 5.1).
+Every frame the device sends, on UART or BLE, is a short run of bytes produced by `PacketiserTask`. The inherited IES rules are in `documents/reference/ies_message_protocol.md` Section 5.1. This section is the layout actually emitted by `packetiser.cpp`.
+
+**Bytes every frame shares**
+
+| Position | Name | Meaning |
+|---|---|---|
+| First byte | Start | Always `0xA0`. A receiver scans for this byte to find the start of a frame. |
+| Second byte | Frame counter | Goes up by 1 on every frame this task sends, then wraps from 255 back to 0. A skip means a frame was dropped. |
+| Third byte | Type and count | One byte split into two halves of 4 bits. The high half is the frame type. The low half is a count: how many channel samples follow, or how many payload bytes follow. |
+| Middle bytes | Payload | Depends on the type. Described below. |
+| Last byte | Stop | Always `0xC0`. |
+
+The third byte is built as `(type << 4) | count`: shifting the type left by 4 moves it into the high half, and the count fills the low half. Reading it back is the reverse: high half = byte divided by 16, low half = byte modulo 16.
+
+| Frame | Type (high half) | Third byte | What the low half counts |
+|---|---|---|---|
+| EEG | 0 | `0x02` for 2 channels, `0x04` for 4 | Channel samples that follow |
+| Response | 6 | `0x60` plus the payload length, written `0x6N` | Payload length, 0–12 |
+| Time sync | 7 | `0x71` | Always 1 |
+| ML output | 8 | `0x81` | Always 1 |
+
+**EEG frame**
+
+Factory settings enable CH3 and CH4, so a normal EEG frame is 10 bytes. This one has frame counter 7, CH3 at +1000 µV, and CH4 at −1 µV:
+
 ```
-[0xA0 start][frame_count 1B][type_ch 1B: (type<<4)|num_ch][ch_data N×3B][0xC0 stop]
-     type nibble:  0=EEG  5=TIME_SYNC
-     ch nibble:    number of 3-byte channel data fields
-
-EEG (4-channel, 250 SPS):   [A0][cnt][0x04][ch0 3B][ch1 3B][ch2 3B][ch3 3B][C0] = 16 B
-TIME_SYNC:                  [A0][cnt][0x51][ts_us 4B][sample_cnt 4B][C0]          = 12 B
+A0  07  02  00 03 E8  FF FF FF  C0
+│   │   │   └────┬────┘└───┬───┘  │
+│   │   │    CH3 = +1000   CH4=−1  stop
+│   │   type 0 (EEG), 2 channels
+│   frame number 7
+start
 ```
 
-**Still open — Response and ML frames:** IES-extension frame formats for `Response` and `MLOutput` are TBD. Proposed type nibble values:
-- `4` — RESPONSE: `cmd_id (1B)` + `status (1B)` + `payload_len (1B)` + `payload (≤8B)` → frame ≤ 15 B
-- `6` — ML_OUTPUT: `class_label (1B)` + `confidence (4B)` → frame = 9 B (future, Q8)
+Each sample is a signed 24-bit integer, written with the most significant byte first. `+1000` is the three bytes `00 03 E8`. `−1` is `FF FF FF`. The value fits in −8,388,608 … +8,388,607.
 
-**Wire object:** `WireFrame { uint8_t len; FrameDest dest; uint8_t bytes[IES_MAX_FRAME_SIZE]; }` (22 B) — produced by PacketiserTask; `dest` selects UART or BLE (unicast, internal only).
+Which channels appear, and in which order, comes from the channel-enable mask: bit 0 is CH1, bit 3 is CH4, and set bits are sent from lowest to highest. The factory mask `0b00001100` therefore sends CH3, then CH4. Enabling all four channels makes a 16-byte frame: start, counter, `0x04`, four 3-byte samples, stop. The length is always `4 + 3 × (number of selected channels)`.
+
+`OutputMode::UV` (the default) stores each sample as an integer microvolt after gain correction. `OutputMode::RAW` stores the ADC count. Both modes use the same three-byte packing.
+
+**Response frame**
+
+`A0`, frame counter, third byte (`0x6N`), command id, status, payload length, the payload bytes, `C0`.
+
+The low half of the third byte and the explicit length byte carry the same number, so a parser can read the length without splitting the third byte. A response is 7 bytes of framing plus the payload. The longest payload is 12 bytes, so the longest response is 19 bytes. The frame buffer holds 20.
+
+**Time-sync frame** — 12 bytes, sent once a second
+
+`A0`, frame counter, `0x71`, microseconds since boot as 4 bytes with the most significant byte first, the sample counter as 4 bytes in the same order, `C0`.
+
+**ML frame** — 9 bytes, not emitted yet
+
+`A0`, frame counter, `0x81`, class label (1 byte), the confidence `float` as its raw 4 bytes with the least significant byte first, `C0`.
+
+**Wire object:** `WireFrame { uint8_t len; FrameDest dest; uint8_t bytes[IES_MAX_FRAME_SIZE]; }` (22 B) — produced by PacketiserTask. `dest` selects UART or BLE and is never sent on the wire.
 
 ---
 
 #### Q10 — BLE Service and Characteristic UUIDs
-**Status:** 🔴 OPEN  
-**Blocks:** `ble_app` placeholder  
-**Question:** Custom 128-bit UUIDs needed for:
-- EEG streaming service
-- EEG data characteristic (notify)
-- ML output characteristic (notify, future)
-- Control/status characteristic (write/read)
+**Status:** ✅ **RESOLVED**  
+**Decision:** Custom 128-bit UUIDs defined in `config.h` and `ble_channel.h`:
 
-**Recommendation:** Generate UUIDs using standard UUID generator; document in separate BLE protocol spec.
+| Entity | UUID |
+|---|---|
+| EEG Streaming Service | `A9E07020-0001-4A58-B8C9-3F0DAB7E5C1D` |
+| TX Characteristic (notify, device→host) | `A9E07020-0002-4A58-B8C9-3F0DAB7E5C1D` |
+| RX Characteristic (write, host→device) | `A9E07020-0003-4A58-B8C9-3F0DAB7E5C1D` |
+
+See `ble_channel_design.md` §9.1.1 for full details.
 
 ---
 
@@ -354,18 +382,8 @@ TIME_SYNC:                  [A0][cnt][0x51][ts_us 4B][sample_cnt 4B][C0]        
 ---
 
 #### Q13 — UART Command Vocabulary and Message Format
-**Status:** 🔴 OPEN  
-**Blocks:** Command Handler implementation  
-**Question:** Define specific command identifiers, argument formats, and response formats.  
-**Proposed minimal command set for Phase 2:**
-- `START` / `STOP` — begin/halt EEG streaming
-- `SET_GAIN <gain>` — configure ADS1299 gain (1, 2, 4, 6, 8, 12, 24)
-- `SET_ODR <odr>` — configure output data rate (250, 500, 1000, 2000)
-- `ENABLE_UART` / `DISABLE_UART` — set enUART flag at Gateway
-- `ENABLE_BLE` / `DISABLE_BLE` — set enBLE flag at Gateway
-- `STATUS` — query current configuration and channel states
-
-**Recommendation:** ASCII format for Phase 2 (easy debugging); binary for production. Define formal command grammar.
+**Status:** ✅ **RESOLVED**  
+**Decision:** Full command set implemented in `cmd_handler.h` (`CommandId` enum) and `cmd_handler.cpp`. Both iES-inherited bare-byte commands and Nicla-specific binary commands are implemented. See §6.6 Command Registry for the complete table.
 
 ---
 
@@ -464,7 +482,7 @@ All tasks are RTOS threads managed by Arduino Mbed OS. Task priorities follow CM
 | **PacketiserTask** | `osPriorityAboveNormal` (+1) | 2048 | Queue non-empty | Serialise EEG/ML/responses to IES WireFrames |
 | **GatewayTask** | `osPriorityNormal` (0) | 2048 | Queue non-empty | Route data/commands between channels |
 | **UartChannelTask** | `osPriorityNormal` (0) | 2048 | RX/TX events | UART I/O + framing |
-| **BleChannelTask** (future) | `osPriorityNormal` (0) | 4096 | BLE events | BLE I/O + aggregation |
+| **BleChannelTask** | `osPriorityNormal` (0) | 4096 | BLE events | BLE I/O + aggregation (Stage 2 GATT written; `FEATURE_BLE_ENABLE = 0`) |
 | **CommandHandlerTask** | `osPriorityNormal` (0) | 2048 | Queue non-empty | Execute commands |
 | **MlProcessorTask** (future) | `osPriorityBelowNormal` (-1) | 2048 | Queue non-empty | NDP120 inference |
 
@@ -562,25 +580,25 @@ void PacketiserTask::run() {
 }
 ```
 
-**IES serialisation helpers:**
+**IES serialisation helpers** (byte layout and a worked example are in Q9):
 ```cpp
-// EEG frame: [A0][cnt][0x04][ch0 3B][ch1 3B][ch2 3B][ch3 3B][C0] = 16 B
-WireFrame serializeEeg(const ADS1299_4_Sample& s, uint8_t cnt);
+// EEG. Factory mask sends CH3 then CH4: 10 bytes. All four channels: 16 bytes.
+WireFrame serialiseEeg(const ADS1299_4_Sample& s);
 
-// Response frame: [A0][cnt][0x4N][cmd_id][status][len][payload...][C0] <= 15 B  (Q9)
-WireFrame serializeResponse(const Response& r, uint8_t cnt);
+// Response to a command. 7 bytes of framing plus the payload (at most 19 bytes).
+WireFrame serialiseResponse(const Response& r);
 
-// TIME_SYNC frame: [A0][cnt][0x51][ts_us 4B][sample_cnt 4B][C0] = 12 B
-WireFrame serializeTimeSync(uint32_t ts_us, uint32_t sample_cnt);
+// Time sync, 12 bytes, once per second.
+WireFrame serialiseTimeSync(uint32_t ts_us, uint32_t sample_cnt);
 
-// ML frame: [A0][cnt][0x61][label][confidence 4B][C0] = 9 B  (future, Q8/Q9)
-WireFrame serializeMl(const MLOutput& m, uint8_t cnt);
+// ML result, 9 bytes. Not emitted yet.
+WireFrame serialiseMl(const MLOutput& m);
 ```
 
 
 ### 6.4 Gateway Task
 
-**Type:** `ConsumerProducerTask<GatewayInput, GatewayOutput>`
+**Type:** `BaseTask`
 
 **Implementation:** `gateway.h/.cpp`
 
@@ -623,7 +641,7 @@ void GatewayTask::run() {
 
 ### 6.5 Channel Tasks (UART & BLE)
 
-**Type:** `ConsumerProducerTask<WireFrame, Command>`
+**Type:** `BaseTask`
 
 **Implementation:** `uart_channel.h/.cpp`, `ble_channel.h/.cpp`
 
@@ -637,37 +655,41 @@ void GatewayTask::run() {
 
 ### 6.6 Command Handler Task
 
-**Type:** `ConsumerProducerTask<Command, Response>`
+**Type:** `BaseTask`
 
 **Implementation:** `cmd_handler.h/.cpp`
 
 **Responsibilities:**
 - Parse and execute commands: START, STOP, SET_GAIN, SET_ODR, ENABLE_UART, etc.
-- Generate `Response` packets (type nibble = **6**, NOT 4)
+- Generate response frames (type 6 in the high half of the third byte; layout in Q9)
 - Publish responses to PacketiserTask (for priority dispatch before EEG/ML)
 - Persist modified settings via `PersistentConfig::save()`
 
 **Full Command Registry:**
 
-| Byte | `CommandId` constant | Origin | Payload | Notes |
-|------|----------------------|--------|---------|-------|
-| `'b'` | `CMD_START_STREAMING` | iES | none | Must call `ads1299.startADS()`; not just set a flag |
-| `'s'` | `CMD_STOP_STREAMING` | iES | none | Must call `ads1299.stopADS()` |
-| `'t'` | `CMD_TIME_SYNC` | iES | 4B epoch + 1B CRC | Verify CRC-8; store time offset |
-| `'v'` | `CMD_SOFT_RESET` | iES | none | Send OpenBCI banner via raw UART write |
-| `'.'` | *(missing)* | iES | none | Add: no-op, return OK |
-| `'d'` | *(missing)* | iES | 1B factor | Add: `g_runtimeState.setDownsamplingFactor()`; persist |
-| `'Z'` | *(missing)* | iES | none | Add: impedance ON on CH3+CH4 |
-| `'z'` | *(missing)* | iES | none | Add: impedance OFF |
-| `'p'` | *(missing)* | iES | 1B sub-cmd | Add: `'o'`→OpenBCI raw; `'i'`→iES µV; debug sub-cmds |
-| `0x10` | `CMD_SET_ODR` | Nicla | 1B ODR code | Stub; implement + persist |
-| `0x11` | `CMD_SET_GAIN` | Nicla | 2B ch+gain | Stub; implement + persist |
-| `0x12` | `CMD_SET_OUTPUT_MODE` | Nicla | 1B mode | **Missing** — add to enum; implement + persist |
-| `0x13` | `CMD_SET_CHANNEL_MASK` | Nicla | 1B bitmask | **Missing** — add to enum; implement + persist |
-| `0x20` | `CMD_ENABLE_UART` | Nicla | 1B | Stub |
-| `0x21` | `CMD_ENABLE_BLE` | Nicla | 1B | Stub |
-| `0x30` | `CMD_QUERY_STATUS` | Nicla | none | Stub; return 10-byte status payload |
-| `0x31` | `CMD_SAVE_CONFIG` | Nicla | none | **Missing** — add to enum; call `PersistentConfig::save()` |
+| Byte | `CommandId` constant | Origin | Payload | Status |
+|------|----------------------|--------|---------|--------|
+| `'b'` (0x62) | `CMD_START_STREAMING` | iES | none | ✅ Implemented — applies runtime config, calls `ads1299.startADS()` |
+| `'s'` (0x73) | `CMD_STOP_STREAMING` | iES | none | ✅ Implemented — calls `ads1299.stopADS()` |
+| `'t'` (0x74) | `CMD_TIME_SYNC` | iES | 4B epoch BE + 1B CRC-8 (Modern); 4B only (Legacy) | ✅ Implemented — CRC-8/SHT75 verified; epoch stored |
+| `'v'` (0x76) | `CMD_SOFT_RESET` | iES | none | ✅ Implemented — sends OpenBCI banner via raw UART write |
+| `'.'` (0x2E) | `CMD_HEARTBEAT` | iES | none | ✅ Implemented — no-op keepalive, returns OK |
+| `'d'` (0x64) | `CMD_DOWNSAMPLING` | iES | 1B factor | ✅ Implemented — `g_runtimeState.setDownsamplingFactor()`; legacy guard |
+| `'Z'` (0x5A) | `CMD_IMPEDANCE_ON` | iES | none | ✅ Implemented — sets runtime flag; ADS1299 LOFF registers TODO |
+| `'z'` (0x7A) | `CMD_IMPEDANCE_OFF` | iES | none | ✅ Implemented — clears runtime flag |
+| `'p'` (0x70) | `CMD_UART_PRINT_SEL` | iES | 1B sub-cmd | ✅ Implemented — `'o'`→OutputMode::UV; `'i'`→OutputMode::RAW |
+| `0x10` | `CMD_SET_ODR` | Nicla | 1B ODR code | ✅ Implemented — lazy; hardware written at stream-start |
+| `0x11` | `CMD_SET_GAIN` | Nicla | 2B ch+gain | ✅ Implemented — writes ADS1299 SPI immediately |
+| `0x12` | `CMD_SET_OUTPUT_MODE` | Nicla | 1B mode (0=raw, 1=µV) | ✅ Implemented |
+| `0x13` | `CMD_SET_CHANNEL_MASK` | Nicla | 1B bitmask | ✅ Implemented — writes ADS1299 SPI immediately |
+| `0x14` | `CMD_SET_HOST_MODE` | Nicla | 1B (0=MODERN, 1=LEGACY_IES) | ✅ Implemented — triggers live baud change; ack always forced through |
+| `0x20` | `CMD_ENABLE_UART` | Nicla | 1B | ✅ Implemented |
+| `0x21` | `CMD_ENABLE_BLE` | Nicla | 1B | ✅ Implemented |
+| `0x30` | `CMD_QUERY_STATUS` | Nicla | none | ✅ Implemented — returns 11-byte status payload |
+| `0x31` | `CMD_SAVE_CONFIG` | Nicla | none | ✅ Implemented — calls `PersistentConfig::save()` |
+| `0x32` | `CMD_GET_VERSION` | Nicla | none | ✅ Implemented — returns [major][minor][patch] = [0][2][0] |
+| `0x40` | `CMD_DEMO` | Nicla | 1B transport (0=src,1=UART,2=BLE) | ✅ Implemented — runtime only; loads defaults + test signal + starts stream |
+| `0x41` | `CMD_RESET` | Nicla | none | ✅ Implemented — `NVIC_SystemReset()` |
 
 **Streaming command gate** *(2026-06-19)*
 
@@ -675,13 +697,13 @@ While `_isStreaming` is true, `executeCommand()` accepts only:
 
 | Command | `CommandId` | Rationale |
 |---|---|---|
-| `STOP_STREAMING` | `'s'` | Required to end recording |
-| `HEARTBEAT` | `'.'` | Link keepalive; no state change |
-| `TIME_SYNC` | `0x74` | Epoch sync during recording |
+| `STOP_STREAMING` | `'s'` (0x73) | Required to end recording |
+| `HEARTBEAT` | `'.'` (0x2E) | Link keepalive; no state change |
+| `TIME_SYNC` | `'t'` (0x74) | Epoch sync during recording |
 
 All other commands — including `QUERY_STATUS`, `GET_VERSION`, `START_STREAMING`, and every config setter — return `ERR_NOT_ALLOWED` (0x04). Status and config queries must be issued **before** `START` or **after** `STOP`. Host apps should track settings locally during a stream.
 
-**Command Response-Time Characterisation** *(measured 2026-06-19, 921600 baud, 30 runs per command, 1 s settle)*
+**Command Response-Time Characterisation** *(measured 2026-06-19, 460800 baud MODERN mode, 30 runs per command, 1 s settle)*
 
 Commands fall into three latency classes based on what the handler must do:
 
@@ -707,7 +729,7 @@ Commands fall into three latency classes based on what the handler must do:
 
 †SAVE_CONFIG first-call latency varies with page state. In the worst case (full dirty page) the nRF52832 specification allows up to ~500 ms. The 103 ms observed is a typical dirty-write cycle.
 
-**Occasional timeouts (baud-rate drops):** At 921600 baud, approximately 3–7% of SPI-write commands experience a single corrupted byte, causing the response frame to be rejected by the host parser. This is a transport artefact, not a firmware fault. Host software should implement a **retry-up-to-3** policy with the same per-attempt timeout.
+**Occasional timeouts (baud-rate drops):** At 460800 baud, approximately 3–7% of SPI-write commands experience a single corrupted byte, causing the response frame to be rejected by the host parser. This is a transport artefact, not a firmware fault. Host software should implement a **retry-up-to-3** policy with the same per-attempt timeout.
 
 **Priority:** `osPriorityNormal` (0)
 
@@ -908,7 +930,7 @@ GatewayTask::GatewayTask() : BaseTask(osPriorityNormal, ...) {
 
 ### 7.4 Subscription Relationships
 
-Wired during `setup()` in `ADS1299NiclaFW.ino` **before** any task is started. Producers subscribe to consumer queues by calling `getQueue()`; the returned pointer is stored in `_subscribers[]`:
+Wired during `setup()` in `src.ino` **before** any task is started. Producers subscribe to consumer queues by calling `getQueue()`; the returned pointer is stored in `_subscribers[]`:
 
 ```cpp
 // ── EEG data path ──────────────────────────────────────────────────────────
@@ -1067,11 +1089,11 @@ Scale: **≈ 0.5364 µV/LSB** (Vref = 4.5 V, gain = 1, 24-bit two's complement).
       │    2. ADS1299_4_Sample  from  _eegQueue
       │    3. MLOutput          from  _mlQueue        (future)
       │
-      │  Serialize each item to IES native wire format:
-      │    ADS1299_4_Sample  →  [A0][cnt][0x04][ch0 3B][ch1 3B][ch2 3B][ch3 3B][C0]  (16 B)
-      │    Response          →  [A0][cnt][0x4N][cmd_id][status][len][payload…][C0]   (≤15 B) (Q9)
-      │    MLOutput          →  [A0][cnt][0x61][label][confidence 4B][C0]            ( 9 B)  (future, Q9)
-      │    TIME_SYNC         →  [A0][cnt][0x51][ts_us 4B][sample_cnt 4B][C0]         (12 B)
+      │  Serialize each item to one IES frame (byte layout in Q9):
+      │    ADS1299_4_Sample  →  EEG frame. 10 B for the factory two channels, 16 B for four
+      │    Response          →  command reply. 7 B of framing plus the payload
+      │    MLOutput          →  ML result, 9 B (not emitted yet)
+      │    TIME_SYNC         →  time sync, 12 B, once per second
       │
       │  Increments per-stream frame counter (IES byte 1)
       │  One input item → one WireFrame; no combining
@@ -1082,8 +1104,8 @@ Scale: **≈ 0.5364 µV/LSB** (Vref = 4.5 V, gain = 1, 24-bit two's complement).
       │
       │  ┌─────────────────────────────────────────────────────┐
       │  │  Queue: GatewayTask._dataQueue                      │
-      │  │  Type:  WireFrame  (21 B)                           │
-      │  │  Depth: FIFO_DEPTH_GATEWAY_DATA = 128  →  2,688 B   │
+      │  │  Type:  WireFrame  (22 B)                           │
+      │  │  Depth: FIFO_DEPTH_GATEWAY_DATA = 128  →  2,816 B   │
       │  └─────────────────────────────────────────────────────┘
       ▼
 [GatewayTask]  osPriorityNormal
@@ -1093,13 +1115,13 @@ Scale: **≈ 0.5364 µV/LSB** (Vref = 4.5 V, gain = 1, 24-bit two's complement).
       │
       │  ┌────────────────────────────────────────────────────────┐
       │  │  Queue: UartChannelTask._txQueue                       │
-      │  │  Type:  WireFrame  (21 B)                              │
-      │  │  Depth: UART_TX_QUEUE_SIZE = 64  →  1,344 B            │
+      │  │  Type:  WireFrame  (22 B)                              │
+      │  │  Depth: UART_TX_QUEUE_SIZE = 64  →  1,408 B            │
       │  └────────────────────────────────────────────────────────┘
       │  ┌────────────────────────────────────────────────────────┐
-      │  │  Queue: BleChannelTask._txQueue  (future)              │
-      │  │  Type:  WireFrame  (21 B)                              │
-      │  │  Depth: BLE_TX_QUEUE_SIZE = 10  →  210 B               │
+      │  │  Queue: BleChannelTask._txQueue                        │
+      │  │  Type:  WireFrame  (22 B)                              │
+      │  │  Depth: BLE_TX_QUEUE_SIZE = 128  →  2,816 B            │
       │  └────────────────────────────────────────────────────────┘
       ▼
 [UartChannelTask]  osPriorityNormal        [BleChannelTask]  (future)
@@ -1126,23 +1148,18 @@ struct WireFrame {
 // sizeof = 22 B
 ```
 
-IES native frame structure (see `ies_message_protocol.md` Section 5.1):
-```
-[0xA0 start][frame_count 1B][type_ch 1B: (type<<4)|num_ch][ch0 3B]...[chN 3B][0xC0 stop]
-     type nibble: 0=EEG  4=RESPONSE  5=TIME_SYNC  6=ML_OUTPUT
-     ch nibble:   number of 3-byte channel data fields
-```
+IES frame structure (worked example and field-by-field layout: Q9). Every frame is `0xA0`, a frame counter, one type/count byte, the payload, then `0xC0`. The type/count byte stores the frame type in its high 4 bits (0 = EEG, 6 = response, 7 = time sync, 8 = ML) and a count in its low 4 bits.
 
-**`Response`** — reply from CmdHandler, consumed from `_responseQueue` (`cmd.h`, 12 B):
+**`Response`** — reply from CmdHandler, consumed from `_responseQueue` (`cmd.h`, 16 B):
 
 ```cpp
 struct Response {
     uint8_t   cmd_id;                        // echoes Command::cmd_id
     CmdStatus status;                        // OK | ERR_UNKNOWN | ERR_BAD_PAYLOAD | …
-    uint8_t   payload[IES_CMD_PAYLOAD_MAX];  // response data (command-specific, ≤ 8 B)
+    uint8_t   payload[IES_CMD_PAYLOAD_MAX];  // response data (command-specific, ≤ 12 B)
     uint8_t   payload_len;
     CmdSource dest;                          // transport for the reply
-};  // sizeof == 12 B  (IES_CMD_PAYLOAD_MAX = 8, from config.h)
+};  // sizeof == 16 B  (IES_CMD_PAYLOAD_MAX = 12, from config.h)
 ```
 
 **`MLOutput`** — ML result, future (`packetiser.h`, ≈ 8 B):
@@ -1170,13 +1187,13 @@ struct MLOutput {
       │                                        │
       │  ┌──────────────────────────────────────────────────────┐
       │  │  Queue: GatewayTask._cmdFromUartQueue                │
-      │  │  Type:  Command  (11 B)                              │
-      │  │  Depth: FIFO_DEPTH_CMD = 8  →  88 B                  │
+      │  │  Type:  Command  (15 B)                              │
+      │  │  Depth: FIFO_DEPTH_CMD = 8  →  120 B                 │
       │  └──────────────────────────────────────────────────────┘
       │  ┌──────────────────────────────────────────────────────┐
       │  │  Queue: GatewayTask._cmdFromBleQueue  (future)       │
-      │  │  Type:  Command  (11 B)                              │
-      │  │  Depth: FIFO_DEPTH_CMD = 8  →  88 B                  │
+      │  │  Type:  Command  (15 B)                              │
+      │  │  Depth: FIFO_DEPTH_CMD = 8  →  120 B                 │
       │  └──────────────────────────────────────────────────────┘
       ▼
 [GatewayTask]  osPriorityNormal
@@ -1187,8 +1204,8 @@ struct MLOutput {
       │
       │  ┌──────────────────────────────────────────────────────┐
       │  │  Queue: CommandHandlerTask._cmdQueue                 │
-      │  │  Type:  Command  (11 B)                              │
-      │  │  Depth: FIFO_DEPTH_CMD = 8  →  88 B                  │
+      │  │  Type:  Command  (15 B)                              │
+      │  │  Depth: FIFO_DEPTH_CMD = 8  →  120 B                 │
       │  └──────────────────────────────────────────────────────┘
       ▼
 [CommandHandlerTask]  osPriorityNormal
@@ -1202,8 +1219,8 @@ struct MLOutput {
       │
       │  ┌──────────────────────────────────────────────────────┐
       │  │  Queue: PacketiserTask._responseQueue                │
-      │  │  Type:  Response  (12 B)  ← defined in Path B above  │
-      │  │  Depth: FIFO_DEPTH_RESPONSE = 8  →  96 B             │
+      │  │  Type:  Response  (16 B)  ← defined in Path B above  │
+      │  │  Depth: FIFO_DEPTH_RESPONSE = 8  →  128 B            │
       │  └──────────────────────────────────────────────────────┘
       ▼
 [PacketiserTask]  — Response dispatched at highest priority (before EEG/ML)
@@ -1211,15 +1228,15 @@ struct MLOutput {
       └──► serialized to WireFrame → GatewayTask → channel → wire
 ```
 
-**`Command`** — control-plane message (`cmd.h`, 11 B):
+**`Command`** — control-plane message (`cmd.h`, 15 B):
 
 ```cpp
 struct Command {
     uint8_t   cmd_id;                        // IES_CMD_* ('b', 's', 't', …)
-    uint8_t   payload[IES_CMD_PAYLOAD_MAX];  // command arguments (≤ 8 B)
+    uint8_t   payload[IES_CMD_PAYLOAD_MAX];  // command arguments (≤ 12 B)
     uint8_t   payload_len;
     CmdSource source;                        // UART | BLE
-};  // sizeof == 11 B  (IES_CMD_PAYLOAD_MAX = 8, from config.h)
+};  // sizeof == 15 B  (IES_CMD_PAYLOAD_MAX = 12, from config.h)
 ```
 
 ---
@@ -1233,19 +1250,17 @@ Every `push()` / `pop()` acquires a per-queue `rtos::Mutex`.
 | Consumer task | Queue member | Item type | Item size | Depth | Config key | BSS cost |
 |---|---|---|---|---|---|---|
 | `PacketiserTask` | `_eegQueue` | `ADS1299_4_Sample` | 20 B | 64 | `FIFO_DEPTH_STREAMING` | 1,280 B |
-| `PacketiserTask` | `_mlQueue` | `MLOutput` | 8 B | 32 | `FIFO_DEPTH_EEG_ML` | 256 B |
-| `PacketiserTask` | `_responseQueue` | `Response` | 12 B | 8 | `FIFO_DEPTH_RESPONSE` | 96 B |
+| `PacketiserTask` | `_mlQueue` | `MLOutput` | 8 B | 16 | `FIFO_DEPTH_ML_QUEUE` | 128 B |
+| `PacketiserTask` | `_responseQueue` | `Response` | 16 B | 8 | `FIFO_DEPTH_RESPONSE` | 128 B |
 | `GatewayTask` | `_dataQueue` | `WireFrame` | 22 B | 128 | `FIFO_DEPTH_GATEWAY_DATA` | 2,816 B |
-| `GatewayTask` | `_cmdFromUartQueue` | `Command` | 11 B | 8 | `FIFO_DEPTH_CMD` | 88 B |
-| `GatewayTask` | `_cmdFromBleQueue` | `Command` | 11 B | 8 | `FIFO_DEPTH_CMD` | 88 B |
+| `GatewayTask` | `_cmdFromUartQueue` | `Command` | 15 B | 8 | `FIFO_DEPTH_CMD` | 120 B |
+| `GatewayTask` | `_cmdFromBleQueue` | `Command` | 15 B | 8 | `FIFO_DEPTH_CMD` | 120 B |
 | `UartChannelTask` | `_txQueue` | `WireFrame` | 22 B | 64 | `UART_TX_QUEUE_SIZE` | 1,408 B |
 | `BleChannelTask` | `_txQueue` | `WireFrame` | 22 B | 128 | `BLE_TX_QUEUE_SIZE` | 2,816 B |
-| `CommandHandlerTask` | `_cmdQueue` | `Command` | 11 B | 8 | `FIFO_DEPTH_CMD` | 88 B |
+| `CommandHandlerTask` | `_cmdQueue` | `Command` | 15 B | 8 | `FIFO_DEPTH_CMD` | 120 B |
 
-**Active BSS (Phase 2, no BLE/ML):** ~5,584 B (~5.5 KB)  
-**With BLE + ML (future):** ~6,138 B (~6.0 KB) — pending `BLE_TX_QUEUE_SIZE` update to 128 (→ 2,688 B), actual BLE queue cost will be ~8,610 B (~8.4 KB total)
-
-> ⚠️ `BLE_TX_QUEUE_SIZE = 10` is a placeholder. It must be changed to **128** (`config.h`) before BLE streaming is enabled. At depth 10, the queue overflows on the first 30 ms BLE Connection Interval gap. See `ble_channel_design.md` Section 5.1.
+**Active BSS (Phase 2, UART only, no BLE/ML):** ~6,632 B FIFO + stacks (~12 KB total)  
+**With BLE + ML (future):** ~9,448 B FIFO + stacks (~17 KB total)
 
 ---
 
@@ -1265,7 +1280,7 @@ Every `push()` / `pop()` acquires a per-queue `rtos::Mutex`.
 ### 9.2 UART Channel
 
 **Task:** `UartChannelTask`  
-**Interface:** USB Serial (CDC), 921600 baud  
+**Interface:** USB Serial (CDC), 460800 baud (MODERN default) / 115200 baud (OpenVIBE/Legacy mode)  
 **Priority:** `osPriorityNormal` (0)
 
 **RX Path:**
@@ -1288,7 +1303,7 @@ Every `push()` / `pop()` acquires a per-queue `rtos::Mutex`.
 **Interface:** BLE 5.0 (nRF52832 built-in, 1M PHY only)  
 **Priority:** `osPriorityNormal` (0) — must be ≥ `GatewayTask` (producer) priority to avoid starvation  
 **BLE Library:** Mbed OS BLE API (`ble/BLE.h`) — Q11 resolved; see `ble_channel_design.md` Section 4  
-**Status:** FUTURE — placeholder stubs only; `BLE_TX_QUEUE_SIZE = 10` in `config.h` must be updated to 128  
+**Status:** Stage 2 GATT service implemented in `ble_channel.cpp`; disabled by `FEATURE_BLE_ENABLE = 0` and `BLE_RADIO_INIT_ENABLE = 0`. TX aggregation loop not yet implemented (`run()` sleeps indefinitely). `BLE_TX_QUEUE_SIZE = 128` in `config.h`.  
 **Full design:** `ble_channel_design.md`
 
 **RX Path:**
@@ -1306,7 +1321,7 @@ Every `push()` / `pop()` acquires a per-queue `rtos::Mutex`.
 **BLE EventQueue thread:** A dedicated thread running `ble_event_queue.dispatch_forever()` is required alongside `BleChannelTask` to process SoftDevice events. All communication between this thread and `BleChannelTask` uses `rtos::Semaphore` or `FifoQueue`.
 
 **Framing:** None at this layer. IES wire format already in `WireFrame`.  
-**UUIDs:** Q10 open
+**UUIDs:** Defined — Service `A9E07020-0001-...`, TX `A9E07020-0002-...`, RX `A9E07020-0003-...` (see Q10 resolved above and `ble_channel_design.md` §9.1.1)
 
 ### 9.4 Command Processing
 
@@ -1325,7 +1340,7 @@ UART RX / BLE Write → Channel Task → Gateway → Command Handler → Respons
 - **Execution:** Perform system action (start/stop, configure, query)
 - **Response generation:** Construct `Response` with status code and payload
 
-**Command Vocabulary:** Q13 open — proposed commands in Section 4.2 Q13
+**Command Vocabulary:** Fully implemented — see §6.6 Command Registry
 
 ---
 
@@ -1342,7 +1357,15 @@ void setup() {
     // ===== 1. Board Initialization =====
     nicla::begin();  // NICLA Voice board-specific init (enables VDDIO_EXT 3.3V)
 
-    Serial.begin(SERIAL_BAUD_RATE);  // 921600 baud (1 Mbaud caused Windows CDC corruption)
+    g_runtimeState.initialize();  // load factory defaults into RAM
+
+    // Optional: restore saved config from Flash (baud, channel mask, sample rate, etc.)
+    // Uncomment to enable persistent settings across power cycles.
+    // If disabled, the device always boots with factory defaults (OPENVIBE mode, 115200 baud).
+    // PersistentConfig::load(g_runtimeState);
+
+    uint32_t bootBaud = g_runtimeState.isOpenVibeMode() ? SERIAL_BAUD_OPENVIBE : SERIAL_BAUD_MODERN;
+    Serial.begin(bootBaud);
     // Wait for USB CDC up to SERIAL_CONNECT_TIMEOUT_MS
     unsigned long t0 = millis();
     while (!Serial && (millis() - t0) < SERIAL_CONNECT_TIMEOUT_MS) {
@@ -1350,9 +1373,8 @@ void setup() {
     }
 
     // ===== 2. ADS1299 Initialization =====
-    ads1299.verbosity = true;
+    ads1299.verbosity = false;     // disable verbose register logging
     ads1299.initialize();          // SPI init, reset, register config
-    ads1299.verbosity = false;
 
     // Verify device ID
     byte id = ads1299.ADS_getDeviceID(BOARD_ADS);  // expected: ADS_ID (0x3C)
@@ -1729,45 +1751,32 @@ public:
 **GatewayTask:**
 
 ```cpp
-class GatewayTask : public ConsumerProducerTask<GatewayInput, GatewayOutput> {
+class GatewayTask : public BaseTask {
 private:
-    bool  _enUART;
-    bool  _enBLE;
-    
+    FifoQueue<WireFrame, FIFO_DEPTH_GATEWAY_DATA>  _dataQueue;
+    FifoQueue<Command,   FIFO_DEPTH_CMD>           _cmdFromUartQueue;
+    FifoQueue<Command,   FIFO_DEPTH_CMD>           _cmdFromBleQueue;
+    IQueue<WireFrame>*  _uartTxQueue;
+    IQueue<WireFrame>*  _bleTxQueue;
+    IQueue<Command>*    _cmdHandlerQueue;
+    rtos::Mutex         _flagsMutex;
+    bool                _uartEnabled;
+    bool                _bleEnabled;
+
 protected:
-    void run() override {
-        while (!_stopRequested) {
-            GatewayInput input;
-            if (_incomingQueue->pop(input)) {
-                
-                if (input.isCommand()) {
-                    if (validateCommand(input.command)) {
-                        // Route to Command Handler
-                        distribute(input.command);
-                    }
-                }
-                else if (input.isData()) {
-                    // Route to enabled channels
-                    if (_enUART) distributeToUART(input.data);
-                    if (_enBLE) distributeToBLE(input.data);
-                }
-            }
-            else {
-                thisThread::sleep_for(1ms);
-            }
-        }
-    }
-    
+    void run() override;  // pops _dataQueue, _cmdFromUartQueue, _cmdFromBleQueue;
+                          // routes WireFrames via frame.dest; validates and forwards commands
+
 public:
-    GatewayTask() 
-        : ConsumerProducerTask(osPriorityNormal, 1536),
-          _enUART(true),
-          _enBLE(false) {}
-    
-    void enableChannel(ChannelType channel, bool enable) {
-        if (channel == CHANNEL_UART) _enUART = enable;
-        if (channel == CHANNEL_BLE) _enBLE = enable;
-    }
+    GatewayTask();
+    IQueue<WireFrame>* getDataQueue()          { return &_dataQueue; }
+    IQueue<Command>*   getUartCommandQueue()   { return &_cmdFromUartQueue; }
+    IQueue<Command>*   getBleCommandQueue()    { return &_cmdFromBleQueue; }
+    void setUartChannel(IQueue<WireFrame>* q)  { _uartTxQueue = q; }
+    void setBleChannel(IQueue<WireFrame>* q)   { _bleTxQueue  = q; }
+    void setCmdHandlerQueue(IQueue<Command>* q){ _cmdHandlerQueue = q; }
+    void setUartEnabled(bool enabled);
+    void setBleEnabled(bool enabled);
 };
 ```
 
@@ -1785,7 +1794,7 @@ public:
 - Grouped by functional category
 - Includes calculated memory budget validation
 
-**File:** `firmware/ADS1299NiclaFW/config.h`
+**File:** `firmware/src/config.h`
 
 ### 12.2 Configuration Sections
 
@@ -1793,27 +1802,29 @@ public:
 
 ```cpp
 // EEG sample buffer (PacketiserTask _eegQueue input)
-#define FIFO_DEPTH_STREAMING       64    // 64 × 20 bytes = 1280 bytes
-                                         // @ 1000 SPS → 64ms buffer
-                                         // @ 16 kSPS (max) → 4ms buffer
+#define FIFO_DEPTH_STREAMING       64    // 64 × 20 B = 1280 B; @ 1000 SPS → 64 ms buffer
 
-// EEG to BLE channel buffer
-#define FIFO_DEPTH_EEG_BLE         64    // 1280 bytes
+// EEG to BLE channel buffer (future)
+#define FIFO_DEPTH_EEG_BLE         64
 
-// EEG to ML processor buffer
-#define FIFO_DEPTH_EEG_ML          32    // 640 bytes
+// EEG to ML processor buffer (future)
+#define FIFO_DEPTH_EEG_ML          32
 
-// Gateway input buffer
-#define FIFO_DEPTH_GATEWAY         20
+// PacketiserTask → GatewayTask input buffer
+#define FIFO_DEPTH_GATEWAY_DATA   128
 
-// UART Channel output buffer
-#define FIFO_DEPTH_UART            10
+// Gateway → UART channel TX buffer
+#define UART_TX_QUEUE_SIZE         64
 
-// BLE Channel output buffer (future)
-#define FIFO_DEPTH_BLE             10
+// Gateway → BLE channel TX buffer
+#define BLE_TX_QUEUE_SIZE         128   // 128 ms headroom at 1 kSPS
 
-// Command Handler input buffer
-#define FIFO_DEPTH_CMD             5
+// Command queues
+#define FIFO_DEPTH_CMD              8   // channels → Gateway → CmdHandler
+#define IES_CMD_PAYLOAD_MAX        12   // max bytes in Command/Response payload
+
+// CmdHandler → PacketiserTask response queue
+#define FIFO_DEPTH_RESPONSE         8
 
 // Near-full threshold (percentage)
 #define FIFO_NEAR_FULL_PCT         75
@@ -1829,8 +1840,8 @@ public:
 #define TASK_PRIORITY_ML             osPriorityAboveNormal  // future
 #define TASK_PRIORITY_LOG            osPriorityLow          // future
 #define TASK_PRIORITY_COMMAND        osPriorityNormal       // future
-// Note: PacketiserTask, GatewayTask, UartChannelTask, CommandHandlerTask use
-// priorities hardcoded in their constructors (osPriorityAboveNormal / osPriorityNormal)
+// Note: PacketiserTask, GatewayTask, UartChannelTask, CommandHandlerTask pass
+// osPriorityAboveNormal / osPriorityNormal directly in their constructors (no named constant)
 
 // Task Stack Sizes (bytes)
 // Oversized vs. Phase 1 estimates to accommodate CDC USB + debug float paths.
@@ -1846,32 +1857,33 @@ public:
 
 #### Section 2.5: ADS1299 Hardware Configuration
 
+> **Note:** `ADS1299_DEFAULT_ODR` and `ADS1299_MAX_ODR` macros are not defined in `config.h`.
+> The ADS1299 ODR is set at runtime via the command interface (`CMD_SET_ODR`) or in `eeg.cpp` initialization.
+> The constants below are documentation-only summaries of the design intent, not actual `#define`s.
+
 ```cpp
-// ADS1299 Sampling Rate (Q5 resolved)
-#define ADS1299_DEFAULT_ODR          SPS_250    // Default: 250 SPS for testing
-#define ADS1299_MAX_ODR              SPS_16000  // Maximum capacity: 16 kSPS
-
-// ADS1299 Channel Configuration
+// ADS1299 Channel Configuration (actual config.h values)
 #define ADS1299_GAIN_DEFAULT         ADS_GAIN01  // Default gain: ×1 (matches iES v0.3 initialize_ads() default)
-#define ADS1299_ACTIVE_CHANNELS      4          // 4-channel ADS1299
+#define ADS1299_ACTIVE_CHANNELS      4          // 4-channel ADS1299-4
 
-// Notes:
-// - System designed for 16 kSPS maximum throughput:
+// Design intent notes (ODR set at runtime):
+// - Maximum throughput target: 16 kSPS
 //   * Raw ADC data: 192 kB/s (4 ch × 3 bytes × 16 kSPS)
-//   * ADS1299_4_Sample struct: 320 kB/s (20 bytes × 16 kSPS)
+//   * ADS1299_4_Sample struct (20 B): 320 kB/s at 16 kSPS
 //   * BLE: Requires packet optimization to fit 2 Mbps PHY
 // - Default 1000 SPS for validation (20 kB/s struct, BLE-proven)
-// - ODR can be changed at runtime via command interface (Q13)
+// - ODR can be changed at runtime via CMD_SET_ODR command
 ```
 
 #### Section 3: Serial/UART Configuration
 
 ```cpp
-#define SERIAL_BAUD_RATE             921600     // USB CDC baud rate (1 Mbaud caused data corruption on Windows)
-#define SERIAL_CONNECT_TIMEOUT_MS    5000       // max wait for host to open port in setup()
-#define SERIAL_CONNECT_POLL_MS       10         // polling interval during that wait
-#define SERIAL_WRITE_TIMEOUT_MS      100        // blocking-write deadline
-#define UART_BACKPRESSURE_SLEEP_MS   5          // back-off when USB CDC TX is full
+#define SERIAL_BAUD_MODERN           460800   // default baud (4×legacy; streaming headroom)
+#define SERIAL_BAUD_OPENVIBE         115200   // Legacy/OpenVIBE mode (CBR_115200 hardcoded in CDriveriES)
+#define SERIAL_CONNECT_TIMEOUT_MS    5000     // max wait for host to open port in setup()
+#define SERIAL_CONNECT_POLL_MS       10       // polling interval during that wait
+#define SERIAL_WRITE_TIMEOUT_MS      100      // blocking-write deadline
+#define UART_BACKPRESSURE_SLEEP_MS   5        // back-off when USB CDC TX is full
 ```
 
 #### Section 4: Data Stream Format
@@ -1908,7 +1920,8 @@ public:
 #define DEBUG_STACK_HEALTH    (1 << 8)  // heap free + stack watermark
 
 #define DEBUG_DEFAULT_MASK    (DEBUG_ADS1299_INIT | DEBUG_FIFO_OVERFLOW | \
-                               DEBUG_UART_CHANNEL | DEBUG_STACK_HEALTH)
+                               DEBUG_UART_CHANNEL | DEBUG_STACK_HEALTH | \
+                               DEBUG_COMMAND)
 ```
 
 #### Section 6: Timing
@@ -1921,19 +1934,21 @@ public:
 
 ```cpp
 #define IES_MAX_FRAME_SIZE    20   // max IES frame body bytes (4-ch EEG = 16 B)
-#define IES_CMD_PAYLOAD_MAX    8   // max bytes in a Command payload field
+#define IES_CMD_PAYLOAD_MAX   12   // max bytes in a Command/Response payload (QUERY_STATUS needs 10)
 ```
 
 #### Section 8: BLE Configuration (Future)
 
 ```cpp
-// Q10 open — UUIDs TBD
-#define BLE_SERVICE_UUID             "12345678-1234-1234-1234-123456789abc"
-#define BLE_DATA_CHAR_UUID           "..."
-#define BLE_CONTROL_CHAR_UUID        "..."
+// Q10 resolved — UUIDs defined in config.h
+#define BLE_SERVICE_UUID_EEG         "A9E07020-0001-4A58-B8C9-3F0DAB7E5C1D"
+#define BLE_CHAR_UUID_DATA           "A9E07020-0002-4A58-B8C9-3F0DAB7E5C1D"  // TX: notify
+#define BLE_CHAR_UUID_COMMAND        "A9E07020-0003-4A58-B8C9-3F0DAB7E5C1D"  // RX: write
 
-#define BLE_MTU                      244  // Maximum (BLE 5.0)
-#define BLE_CONN_INTERVAL_MS         7.5  // 7.5ms (minimum for high throughput)
+#define BLE_DEVICE_NAME              "NICLA_EEG"
+#define BLE_MTU_SIZE                 23   // ATT default; negotiated to 247 (244 data) with DLE
+#define BLE_CONN_INTERVAL_MIN_MS     20   // ms
+#define BLE_CONN_INTERVAL_MAX_MS     40   // ms
 ```
 
 #### Section 9: ML/NDP120 Configuration (Future)
@@ -1948,27 +1963,27 @@ public:
 
 ```cpp
 // ===== FIFO Queue Memory =====
-// ADS1299_4_Sample queues (20 bytes each - no per-sample timestamp)
+// ADS1299_4_Sample queues (20 bytes each)
 #define RAM_FIFO_STREAMING     (FIFO_DEPTH_STREAMING * 20)      // 64 × 20 = 1,280 bytes
 #define RAM_FIFO_EEG_ML        (FIFO_DEPTH_EEG_ML * 20)         // 32 × 20 = 640 bytes
 
-// WireFrame queues (1 + IES_MAX_FRAME_SIZE = 21 bytes each)
-#define RAM_FIFO_GATEWAY       (FIFO_DEPTH_GATEWAY_DATA * 21)   // 128 × 21 = 2,688 bytes
-#define RAM_FIFO_UART          (UART_TX_QUEUE_SIZE * 21)        // 64 × 21 = 1,344 bytes
-#define RAM_FIFO_BLE           (BLE_TX_QUEUE_SIZE * 21)         // 10 × 21 = 210 bytes (future)
+// WireFrame queues (sizeof(WireFrame) = 22 B each)
+#define RAM_FIFO_GATEWAY       (FIFO_DEPTH_GATEWAY_DATA * 22)   // 128 × 22 = 2,816 bytes
+#define RAM_FIFO_UART          (UART_TX_QUEUE_SIZE * 22)        // 64 × 22 = 1,408 bytes
+#define RAM_FIFO_BLE           (BLE_TX_QUEUE_SIZE * 22)         // 128 × 22 = 2,816 bytes
 
-// Command / Response queues (11 / 12 bytes each)
-#define RAM_FIFO_CMD           (FIFO_DEPTH_CMD * 11)            // 8 × 11 = 88 bytes (each)
-#define RAM_FIFO_RESP          (FIFO_DEPTH_RESPONSE * 12)       // 8 × 12 = 96 bytes
+// Command / Response queues (15 / 16 bytes each)
+#define RAM_FIFO_CMD           (FIFO_DEPTH_CMD * 15)            // 8 × 15 = 120 bytes (each)
+#define RAM_FIFO_RESP          (FIFO_DEPTH_RESPONSE * 16)       // 8 × 16 = 128 bytes
 
 // Total FIFO memory (Phase 2, no BLE/ML)
 #define RAM_FIFO_PHASE2        (RAM_FIFO_STREAMING + RAM_FIFO_EEG_ML + \
                                 RAM_FIFO_GATEWAY + RAM_FIFO_UART + \
                                 RAM_FIFO_CMD * 3 + RAM_FIFO_RESP)
-                                // = 1280 + 640 + 420 + 1344 + 264 + 96 = 4,044 bytes (3.9 KB)
+                                // = 1280 + 640 + 2816 + 1408 + 360 + 128 = 6,632 bytes (6.5 KB)
 
 #define RAM_FIFO_WITH_BLE      (RAM_FIFO_PHASE2 + RAM_FIFO_BLE)
-                                // = 4,044 + 210 = 4,254 bytes (4.2 KB)
+                                // = 6,632 + 2,816 = 9,448 bytes (9.2 KB)
 
 // ===== Task Stack Memory =====
 #define RAM_STACKS_PHASE2      (STACK_SIZE_ACQUISITION + STACK_SIZE_PACKETISER + \
@@ -2034,11 +2049,12 @@ public:
 #### Section 11: Feature Enable/Disable Flags
 
 ```cpp
-#define ENABLE_ML                    0  // Future
-#define ENABLE_BLE                   0  // Future
-#define ENABLE_UART                  1  // Phase 2
-#define ENABLE_STATUS_LED            1
-#define ENABLE_FIFO_DIAGNOSTICS      1
+#define FEATURE_STREAMING_ENABLE     1  // USB-CDC data streaming
+#define FEATURE_BLE_ENABLE           0  // BLE (Stage 2 GATT written; radio init disabled)
+#define BLE_RADIO_INIT_ENABLE        0  // set 1 to call ble.init() from BleChannelTask::run()
+#define FEATURE_ML_ENABLE            0  // Future
+#define FEATURE_LOG_ENABLE           0  // Future
+#define FEATURE_COMMAND_ENABLE       0  // Future
 ```
 
 ---
@@ -2047,7 +2063,7 @@ public:
 
 **Purpose:** Thread-safe in-RAM holder for all runtime-modifiable system state.
 
-**Files:** `firmware/ADS1299NiclaFW/runtime_state.h`, `runtime_state.cpp`
+**Files:** `firmware/src/runtime_state.h`, `runtime_state.cpp`
 
 #### Managed Parameters
 
@@ -2055,7 +2071,7 @@ public:
 |----------|-----------|
 | **ADS1299 Channels** | Active/inactive state, gain per channel (CH1-CH4) |
 | **Streaming** | Enable/disable, sample rate, downsampling factor |
-| **Communication** | UART enable, BLE enable |
+| **Host Protocol** | `HostProtocolMode` — MODERN (460800 baud, full protocol) or OPENVIBE (115200 baud, iES-pure) |
 | **Output Mode** | `OutputMode` — iES native (µV) or OpenBCI raw ADC |
 
 **Not managed:** Compile-time constants (`config.h`), pin assignments (`pinDef.h`).
@@ -2063,13 +2079,13 @@ public:
 #### OutputMode Enum
 
 ```cpp
-enum OutputMode {
-    OUTPUT_MODE_IES    = 1,  // iES native: integer µV (default, matches iES v0.3)
-    OUTPUT_MODE_OPENBCI = 0  // OpenBCI-compatible: raw 24-bit ADC codes
+enum class OutputMode : uint8_t {
+    RAW = 0,  ///< Raw ADC counts (OpenBCI compatible)
+    UV  = 1   ///< Integer µV (iES/OpenVIBE compatible, default)
 };
 ```
 
-When `OUTPUT_MODE_IES`, `PacketiserTask::serialiseEeg()` applies:
+When `OutputMode::UV`, `PacketiserTask::serialiseEeg()` applies:
 ```cpp
 double uV = (double)raw_count * EEG_SCALE_UV / (double)gain;
 int32_t uV_int = (int32_t)round(uV);  // clamp to [-8388608, 8388607]
@@ -2087,16 +2103,16 @@ extern RuntimeState g_runtimeState;
 
 #### Design Features
 
-- **Mutex-guarded** when `MBED_ENABLED` is defined in `runtime_state.h`
-- **Validated setters** return `bool` (false on out-of-range input)
-- **Dirty flag** for batched hardware updates: `isDirty()` / `applyToHardware(&ads1299)`
+- **Mutex-guarded** (`MBED_ENABLED` is defined unconditionally in `runtime_state.h`; mutex guards are always active)
+- **Validated setters:** `setChannelGain()` returns `bool` (false on out-of-range channel or gain); most other setters are `void`
+- **Hardware apply:** `applyToHardware(&ads1299)` writes channel power-down and gain registers from current state
 
 #### Integration
 
 - **Command Handler:** Updates state based on received commands; calls `PersistentConfig::save()`
-- **EEG Task:** Queries active channels
-- **PacketiserTask:** Queries `OutputMode`, gain, downsampling
-- **Channel Tasks:** Query output routing flags
+- **EEG Task:** Queries active channels and sample rate
+- **PacketiserTask:** Queries `OutputMode`, gain, downsampling factor
+- **GatewayTask:** Controls UART/BLE routing (independent of RuntimeState)
 
 ---
 
@@ -2104,10 +2120,11 @@ extern RuntimeState g_runtimeState;
 
 **Purpose:** Persist `RuntimeState` settings across power cycles using flash-emulated EEPROM.
 
-**Files:** `firmware/ADS1299NiclaFW/persistent_config.h`, `persistent_config.cpp`
+**Files:** `firmware/src/persistent_config.h`, `persistent_config.cpp`
 
-> **Platform constraint:** The nRF52832 has **no hardware EEPROM**. The Arduino Mbed core
-> provides `<EEPROM.h>` backed by `FlashIAP`, reserving ~1 KB of internal NOR flash.
+> **Platform constraint:** The nRF52832 has **no hardware EEPROM**. The firmware uses
+> Mbed OS `FlashIAP` (`#include "FlashIAP.h"`) directly — not `<EEPROM.h>` — storing the
+> 18-byte config block in the last 4 KB sector of the 512 KB internal NOR flash.
 > See NOTE-007 in `technical_notes.md` for wear-protection strategy.
 
 #### EEPROM Layout (schema v1, 18 bytes)
@@ -2117,14 +2134,14 @@ Offset  Size  Field                    Default
 ──────  ────  ───────────────────────  ───────────────────────
  0       4    magic                    0xE1E50001
  4       1    schema_version           1
- 5       1    output_mode              1 = iES (µV)
- 6       1    sample_rate              ADS1299 ODR code
- 7       1    downsampling_factor      1
+ 5       1    output_mode              1 = iES µV (OutputMode::UV)
+ 6       1    sample_rate              ADS1299_Library::SAMPLE_RATE_1000
+ 7       1    downsampling_factor      4  (1 kSPS ÷ 4 = 250 SPS effective)
  8       4    channel_gain[4]          ADS_GAIN01 (×1)
-12       1    channel_enable_mask      0b00001111 (CH1–CH4)
+12       1    channel_enable_mask      0b00001100 (CH3+CH4 only)
 13       1    uart_enabled_at_boot     1
 14       1    ble_enabled_at_boot      0
-15       1    reserved                 0x00
+15       1    host_protocol_mode       0 = MODERN (was "reserved"; 0x00 migrates for free)
 16       2    crc16 (over bytes 0–15)
 ```
 
@@ -2133,20 +2150,26 @@ Offset  Size  Field                    Default
 ```cpp
 class PersistentConfig {
 public:
-    static bool load(RuntimeState& state);  // load from EEPROM → state; reset to defaults on CRC fail
-    static bool save(const RuntimeState& state);  // write state → EEPROM (read-before-write)
-    static void reset();                          // write factory defaults + commit
+    static bool load(RuntimeState& state);   // read flash → state; reset to defaults on CRC fail
+    static void save(const RuntimeState& state);  // state → flash (read-before-write, wear-safe)
+    static void reset(RuntimeState& state);  // write factory defaults to flash + load into state
 };
 ```
 
 #### Boot Sequence Integration
 
 ```cpp
-// In ADS1299NiclaFW.ino setup():
-if (!PersistentConfig::load(g_runtimeState)) {
-    Serial.println("EEPROM invalid — defaults loaded and written.");
-}
-g_runtimeState.applyToHardware(&ads1299);  // apply gain, channel mask, ODR
+// In src.ino setup():
+g_runtimeState.initialize();  // always set factory defaults first
+
+// Optional: restore saved config from Flash.
+// Currently disabled — device boots at factory defaults (OPENVIBE mode, 115200 baud).
+// PersistentConfig::load(g_runtimeState);
+
+uint32_t bootBaud = g_runtimeState.isOpenVibeMode() ? SERIAL_BAUD_OPENVIBE : SERIAL_BAUD_MODERN;
+Serial.begin(bootBaud);
+// ...
+g_runtimeState.applyToHardware(&ads1299);  // apply channel mask, gain from state
 ```
 
 #### Wear Protection
@@ -2162,76 +2185,73 @@ g_runtimeState.applyToHardware(&ads1299);  // apply gain, channel mask, ODR
 ### 13.1 Current Structure
 
 ```
-NICLA_Voice/
-├── pinDef.h                          ← Pin assignments (SPI, DRDY, RST)
+neuralwear/
+├── firmware/
+│   └── src/                          ← All source code
+│       ├── src.ino                   ← Arduino entry point: setup(), loop(), task wiring
+│       │                               (@file header: ADS1299NiclaFW.ino — logical name)
+│       ├── config.h                  ← Centralized configuration (all tunable params)
+│       ├── pinDef.h                  ← Hardware pin assignments (SPI, DRDY, RST)
+│       ├── build_opt.h               ← Compiler options (mbed-os RTOS config)
+│       │
+│       ├── task.h / .cpp             ← BaseTask, ProducerTask, ConsumerProducerTask
+│       ├── fifo_queue.h              ← Thread-safe FifoQueue<T,N> template
+│       ├── eeg.h / .cpp              ← ADS1299_4_Sample, EegAcquisitionTask
+│       ├── packetiser.h / .cpp       ← PacketiserTask (IES serialiser, WireFrame producer)
+│       ├── gateway.h / .cpp          ← GatewayTask (command/data router)
+│       ├── uart_channel.h / .cpp     ← UartChannelTask (USB-CDC TX/RX + bare-byte parser)
+│       ├── ble_channel.h / .cpp      ← BleChannelTask (Stage 2 GATT written; FEATURE_BLE_ENABLE=0)
+│       ├── cmd_handler.h / .cpp      ← CommandHandlerTask (full iES + Nicla command set)
+│       ├── cmd.h                     ← Command/Response structs, CommandId enum, CmdStatus
+│       ├── runtime_state.h / .cpp    ← RuntimeState (thread-safe in-RAM config)
+│       ├── persistent_config.h / .cpp← PersistentConfig (FlashIAP EEPROM, 18-byte struct)
+│       │
+│       ├── ADS1299_Library.h / .cpp  ← ADS1299 SPI driver (ported from iES_v0.3)
+│       ├── ADS1299_Definitions.h     ← ADS1299 register/constant definitions
+│       ├── DSPI.h / .cpp             ← SPI wrapper (Arduino Mbed compatibility layer)
+│       │
+│       ├── iesUtilities/
+│       │   ├── ies_packet_format.h   ← IES frame constants (IES_FRAME_START, IES_SAMPLE_EEG…)
+│       │   ├── ies_checksum.h / .cpp ← CRC-8/SHT75 checksum
+│       │   ├── ies_downsampling.h / .cpp ← Downsampling helpers
+│       │   ├── ies_misc.h / .cpp     ← Miscellaneous iES utilities
+│       │   └── ies_channel_select.h  ← Channel selection from bitmask
+│       │
+│       ├── ADS1299_Library_Reference.md  ← Library documentation
+│       └── debug_log_tags.md             ← Debug tag reference
 │
-├── test/SPI_Test/                    ← Development project (Phase 2)
-│   ├── SPI_Test.ino                  ← Arduino entry point: setup(), loop()
-│   │
-│   ├── config.h                      ← SINGLE centralized configuration (12 sections)
-│   ├── system_config.h/.cpp          ← Runtime configuration manager (Section 12.3)
-│   │
-│   ├── task.h, task.cpp              ← Base classes: BaseTask, ProducerTask, ConsumerTask
-│   ├── fifo_queue.h                  ← Thread-safe FifoQueue<T,N> template
-│   ├── eeg.h, eeg.cpp                ← ADS1299_4_Sample, EegAcquisitionTask
-│   │
-│   ├── ADS1299_Library.h/.cpp        ← Ported ADS1299 SPI driver
-│   ├── ADS1299_Definitions.h         ← Register definitions
-│   ├── DSPI.h, DSPI.cpp              ← SPI wrapper (compatibility layer)
-│   │
-│   ├── cmd.h, cmd.cpp                ← Command/Response structures (Q13 TBD)
-│   │
-│   └── (future additions):
-│       ├── packetiser.h/.cpp         ← PacketiserTask (IES serialiser)
-│       ├── gateway.h/.cpp            ← Gateway task
-│       ├── uart_channel.h/.cpp       ← UART Channel task
-│       ├── ble_channel.h/.cpp        ← BLE Channel task (Q10-Q11)
-│       ├── cmd_handler.h/.cpp        ← Command Handler task (Q13)
-│       └── ml_processor.h/.cpp       ← ML Processor task (Q6, Q8)
-│
-├── code_references/                  ← Read-only reference (do not edit)
-│   ├── iES_v0.3-master/              ← PRIMARY reference: Original iES firmware (TI-RTOS)
-│   │   ├── Board.h, main_tirtos.c, platform.h, ...
-│   │   └── ies_app/                  ← ADS1299 driver, circular queue, porting source
-│   └── OpenBCI_8/                    ← SECONDARY reference: OpenBCI ADS1299 (Arduino)
-│       ├── ADS1299.cpp/.h, Definitions.h, OpenBCI_8.cpp/.h, ...
-│
-├── NICLA_docs/                       ← Board documentation and scripts
-│   ├── general.md, example1-4.md
-│   ├── check_consistency.py, convert.py, format_html.py, format_md.py
-│   └── deep_code_check.py
-│
-└── Documentation files:
-    ├── firmware_architecture.md              ← This file (architecture spec)
-    ├── dev_log.md                            ← Development log and phase plan
-    ├── SessionHandOver.md                    ← Living session handover
-    ├── ble_channel_design.md                 ← BLE implementation design
-    ├── porting_analysis_app.md
-    ├── porting_analysis_driver.md
-    ├── ies_message_protocol.md
-    ├── ies_application_layer_protocol.md
-    └── technical_notes.md
+└── documents/
+    ├── firmware_architecture.md      ← This file
+    ├── dev_log.md                    ← Development log (single source of truth)
+    ├── ble_channel_design.md         ← BLE implementation design
+    ├── technical_notes.md            ← Technical investigation notes
+    ├── earpiece_pinout.md            ← Hardware pinout reference
+    └── reference/                    ← Read-only reference docs (do not edit)
+        ├── ies_message_protocol.md
+        └── ies_application_layer_protocol.md
 ```
 
 ### 13.2 Module Reference
 
 | Module | Files | Purpose | Status |
 |--------|-------|---------|--------|
-| **Entry Point** | `SPI_Test.ino` | Arduino setup(), loop(), task wiring | Implemented |
-| **Configuration** | `config.h` | Central configuration (12 sections) | Defined |
-| **Runtime Config** | `runtime_state.h/.cpp` | Thread-safe runtime state (`OutputMode`, gain, ODR, channel mask) | Stub — implementation pending |
-| **Persistent Config** | `persistent_config.h/.cpp` | EEPROM-backed persistence (FlashIAP, 18-byte struct, CRC-16) | Planned (Phase 3.4) |
-| **Pin Definitions** | `pinDef.h` | Hardware pin mapping | Defined |
-| **Task Framework** | `task.h/.cpp` | BaseTask, Producer/Consumer templates | Implemented |
-| **FIFO Queue** | `fifo_queue.h` | Thread-safe ring buffer | Implemented (Q18 open) |
-| **EEG Acquisition** | `eeg.h/.cpp` | ADS1299_4_Sample, EegAcquisitionTask | Implemented |
-| **ADS1299 Driver** | `ADS1299_Library.h/.cpp`, `DSPI.h/.cpp` | SPI driver for ADS1299 | Ported from iES_v0.3-master |
-| **Packetiser** | `packetiser.h/.cpp` | IES serialiser task; WireFrame producer | Current |
-| **Gateway** | `gateway.h/.cpp` | Command/data router | Future |
-| **UART Channel** | `uart_channel.h/.cpp` | UART I/O + framing | Future (Q9, Q13) |
-| **BLE Channel** | `ble_channel.h/.cpp` | BLE I/O + framing | Future (Q10, Q11) |
-| **Command Handler** | `cmd_handler.h/.cpp` | Command parser + executor | Future (Q13) |
-| **ML Processor** | `ml_processor.h/.cpp` | NDP120 inference task | Future (Q6, Q8) |
+| **Entry Point** | `src.ino` | Arduino setup(), loop(), task wiring | ✅ Implemented |
+| **Configuration** | `config.h` | Central configuration (all tunable params, 12 sections) | ✅ Implemented |
+| **Pin Definitions** | `pinDef.h` | Hardware pin mapping | ✅ Implemented |
+| **Task Framework** | `task.h/.cpp` | BaseTask, ProducerTask, ConsumerProducerTask | ✅ Implemented |
+| **FIFO Queue** | `fifo_queue.h` | Thread-safe ring buffer (Q18 resolved) | ✅ Implemented |
+| **EEG Acquisition** | `eeg.h/.cpp` | ADS1299_4_Sample, EegAcquisitionTask | ✅ Implemented |
+| **ADS1299 Driver** | `ADS1299_Library.h/.cpp`, `DSPI.h/.cpp` | SPI driver for ADS1299 | ✅ Ported from iES_v0.3 |
+| **IES Utilities** | `iesUtilities/` | CRC-8, downsampling, channel select, packet format | ✅ Implemented |
+| **Packetiser** | `packetiser.h/.cpp` | IES serialiser task; WireFrame producer | ✅ Implemented |
+| **Gateway** | `gateway.h/.cpp` | Command/data router; unicast FrameDest dispatch | ✅ Implemented |
+| **UART Channel** | `uart_channel.h/.cpp` | USB-CDC TX drain + bare-byte RX parser | ✅ Implemented |
+| **BLE Channel** | `ble_channel.h/.cpp` | Stage 2 GATT service written; `FEATURE_BLE_ENABLE=0` | ⚠️ Partial (Stage 2) |
+| **Command Handler** | `cmd_handler.h/.cpp` | Full iES + Nicla command set (all 20 commands) | ✅ Implemented |
+| **Command Types** | `cmd.h` | Command/Response structs, `CommandId` enum, `CmdStatus` | ✅ Implemented |
+| **Runtime State** | `runtime_state.h/.cpp` | Thread-safe in-RAM config (OutputMode, gain, ODR, mask) | ✅ Implemented |
+| **Persistent Config** | `persistent_config.h/.cpp` | FlashIAP EEPROM, 18-byte struct, CRC-16 | ✅ Implemented |
+| **ML Processor** | *(not yet created)* | NDP120 inference task | ❌ Future (Q6, Q8) |
 
 ---
 

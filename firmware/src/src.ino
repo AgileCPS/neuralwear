@@ -35,6 +35,12 @@ void setup() {
     nicla::leds.setColor(green);
 
     g_runtimeState.initialize();
+
+    // Optional: restore saved config from Flash (baud rate, channel mask, sample rate, etc.).
+    // Uncomment to enable persistent settings across power cycles.
+    // If disabled, the device always boots with factory defaults (OPENVIBE mode, 115200 baud).
+    // PersistentConfig::load(g_runtimeState);
+
     uint32_t bootBaud = g_runtimeState.isOpenVibeMode() ? SERIAL_BAUD_OPENVIBE : SERIAL_BAUD_MODERN;
 
     // Start serial (wait for connection up to timeout)
@@ -79,7 +85,7 @@ void setup() {
         while(1);
     }
 
-    // Apply sample rate from PersistentConfig (loaded above); factory default is 1 kSPS.
+    // Apply sample rate from g_runtimeState (factory default 1 kSPS, or from PersistentConfig if enabled above).
     eegAcquisitionTask.setSampleRate(
         (ADS1299_Library::SAMPLE_RATE)g_runtimeState.getSampleRate());
     // Serial.print("Sample rate configured: ");
@@ -89,7 +95,8 @@ void setup() {
 
     // ── Apply persistent config to ADS1299 hardware ─────────────────────────
     // Sets channel power-down bits and gain registers from g_runtimeState.
-    // Must be called after ads1299.initialize() and PersistentConfig::load().
+    // Must be called after ads1299.initialize(). If PersistentConfig::load() is enabled above,
+    // it must also run before this line so channel mask and gain overrides take effect.
     g_runtimeState.applyToHardware(&ads1299);
 
     // ── Channel input routing ───────────────────────────────────────────────

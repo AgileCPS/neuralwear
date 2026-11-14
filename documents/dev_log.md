@@ -4,6 +4,7 @@
 **Hardware:** Nicla Voice + custom ADS1299-4 shield  
 **Protocol:** iES WireFrame over USB-CDC UART; BLE (future)
 
+
 ---
 
 ## Table of Contents
@@ -14,13 +15,8 @@
 - [Phase 5 — BLE Pairing & Streaming](#phase-5--ble-pairing--streaming)
 - [Decision Log](#decision-log)
 - [Known Issues & Notes](#known-issues--notes)
-- [Session Handover](#session-handover)
 
 ---
-
-## Session Handover
-
-**Living document:** [`SessionHandOver.md`](SessionHandOver.md) — read this at the start of each session for current status, test results, and next steps.
 
 ---
 
@@ -50,28 +46,12 @@ Full task pipeline implemented:
 | UartChannelTask (TX drain + RX framing) | `uart_channel.h`, `uart_channel.cpp` | ✅ Done |
 | CommandHandlerTask (cmd execute → response) | `cmd_handler.h`, `cmd_handler.cpp` | ✅ Done |
 | RuntimeState (thread-safe config) | `runtime_state.h`, `runtime_state.cpp` | ✅ Done |
-| Main sketch wiring + task start sequence | `ADS1299NiclaFW.ino` | ✅ Done |
-| WireframeMonitor.py (PC-side GUI monitor) | `firmware/uartLogger/WireframeMonitor.py` | ✅ Done |
+| Main sketch wiring + task start sequence | `src.ino` | ✅ Done |
 
 ### Milestone: Phase 4 Complete — UART Command Pipeline ✅ (2026-06-17, re-validated 2026-06-19)
 
 - Full iES application-layer command set implemented on UART.
-- Original `firmware_autotest.py` (20 tests) passed at least once; superseded by a **four-script strategic test suite** (see §4.8).
 - Key additions: streaming command gate (STOP / HEARTBEAT / TIME_SYNC only), lazy ODR application, persistent config via FlashIAP, µV output mode, DEMO/RESET, `CMD_GET_VERSION`.
-- Host tooling: `FirmwareTestApp.py` (GUI), `ies_protocol.py` (shared library), plus `test_logic.py`, `test_timing.py`, `test_sequences.py`, `test_streaming.py`.
-
-### Milestone: Strategic UART Test Suite — Complete ✅ (2026-06-19, validated 2026-07-04)
-
-Four focused host-side scripts replace the monolithic autotest for day-to-day validation:
-
-| Script | Purpose | Status (2026-07-04 @ 460800) |
-|---|---|---|
-| `test_logic.py` | Command correctness, 1 s settle, 5 s timeout | ✅ **11/11** |
-| `test_timing.py` | RTT characterisation (10 runs/cmd) | ✅ **Complete** — 0 timeouts |
-| `test_sequences.py` | Command interaction / ordering | ✅ **8/8** |
-| `test_streaming.py` | Frame rate, format, continuity, TIME_SYNC, stress DS×4→×2→×1 | ✅ **All pass** |
-
-**UART link:** `SERIAL_BAUD_RATE = 460800` in `config.h` and all host tools (2026-07-04). Chosen as 4×115200 for streaming headroom while staying stable on Windows CDC (921600 was intermittent; 1 Mbaud corrupts bytes).
 
 ### Milestone: OpenVIBE Legacy Compatibility Mode — Complete ✅ (2026-07-09)
 
@@ -114,16 +94,6 @@ ADS1299NiclaFW can be driven **unmodified** by the original OpenVIBE
 
 Function generator bench test on real ADS1299 channels; production mode (CH3+CH4, no internal test signal) field-tested. See §3.3.
 
-### Milestone: Internal Test Signal Verified ✅ (2026-05-09)
-
-- Firmware flashed with `DEBUG_ENABLE` defined.
-- ADS1299 internal test signal generator enabled on all 4 channels (`ADSTESTSIG_PULSE_FAST`).
-- `WireframeMonitor.py` connected and confirmed:
-  - EEG frames arriving at correct rate (1000 SPS).
-  - Waveform shape correct (square wave at fast pulse rate).
-  - TIME_SYNC frames interleaved every 1 s.
-  - No frame drops observed at 921600 baud (see note below).
-
 ---
 
 ## Phase 3 — Analog Input Validation ✅ (2026-07-04)
@@ -149,32 +119,12 @@ Three compile-time modes controlled by macros in `config.h`:
 
 **Files changed:**
 - `config.h` — added `ANALOG_TEST_ENABLE` macro (commented out by default)
-- `ADS1299NiclaFW.ino` — replaced single `#ifdef DEBUG_ENABLE` block with three-way `#ifdef`/`#else`/`#ifndef` logic + `Serial.println` confirmation of active mode
+- `src.ino` — replaced single `#ifdef DEBUG_ENABLE` block with three-way `#ifdef`/`#else`/`#ifndef` logic + `Serial.println` confirmation of active mode
 
 **How to use:**
 1. Comment out `DEBUG_ENABLE` and `ANALOG_TEST_ENABLE` → production mode (CH3+CH4 only)
 2. Uncomment `ANALOG_TEST_ENABLE` only → all 4 channels active for bench testing
 3. Uncomment `DEBUG_ENABLE` → internal test signal (streaming pipeline verification)
-
-### 3.2 — FirmwareTestApp (was WireframeMonitor) Standalone Executable ✅ (2026-05-09, updated 2026-06-17)
-
-**Problem:** `WireframeMonitor.py` depends on a Python environment with `pyserial` and `matplotlib`, which is only available on the development laptop.
-
-**Solution implemented:** PyInstaller single-file executable bundling the Python interpreter and all dependencies. The tool was subsequently renamed and expanded into `FirmwareTestApp.py` (see §4.7).
-
-**Build system:**
-- `firmware/uartLogger/build_exe.bat` — one-click build script for Windows
-- `firmware/uartLogger/FirmwareTestApp.spec` — PyInstaller spec for reproducible builds
-- Output: `firmware/uartLogger/dist/FirmwareTestApp.exe`
-
-**How to build:**
-```
-cd firmware\uartLogger
-build_exe.bat
-```
-
-**How to distribute:**
-Copy `dist/FirmwareTestApp.exe` to any Windows 10/11 machine — no Python installation required.
 
 ### 3.4 — PersistentConfig + OutputMode (µV vs Raw ADC) ✅ (2026-06-17)
 
@@ -195,7 +145,7 @@ Copy `dist/FirmwareTestApp.exe` to any Windows 10/11 machine — no Python insta
 |---|---|
 | `runtime_state.h` | Add `OutputMode` enum + `_outputMode` field + setter/getter; enable `MBED_ENABLED` |
 | `runtime_state.cpp` | Implement all TODO stubs |
-| `ADS1299NiclaFW.ino` `setup()` | Insert `PersistentConfig::load()` + apply-to-hardware |
+| `src.ino` `setup()` | Insert `PersistentConfig::load()` + apply-to-hardware |
 | `packetiser.cpp` `serialiseEeg()` | Branch on `g_runtimeState.getOutputMode()`: iES → µV conversion; OpenBCI → raw |
 | `cmd_handler.cpp` | `CMD_SET_GAIN`, `CMD_SET_ODR`, `CMD_SET_OUTPUT_MODE` → update runtime state + persist |
 
@@ -234,124 +184,9 @@ Bench validation with a function generator on the ADS1299 analog frontend:
 
 **Status:** ✅ UART implementation complete — BLE is next sprint
 
-**Re-validation status (2026-06-19):** Logic, timing, and most sequence tests pass at 921600 baud. Streaming continuity and occasional post-STOP SET_GAIN failures remain open (see `SessionHandOver.md`, `technical_notes.md` NOTE-009).
-
 **Reference documents:**
 - `ies_application_layer_protocol.md`
 - `ies_message_protocol.md`
-- `code_references/iES_v0.3-master/ies_app/ies_task.cpp`
-
-### 4.1 — UART RX Parser (Critical Prerequisite)
-
-Before any command can be received, `uart_channel.cpp::processRx()` must be implemented as a **bare-byte state machine** (not framed). Reference: `ies_task.cpp::btspp_recv_task_fxn()`.
-
-- Read 1 byte from serial.
-- Look up command ID against `IES_CMD_*` constants (+ Nicla-specific `0x10–0x31`).
-- Read additional payload bytes per command (see table below).
-- Construct `Command` struct and push to `_cmdOutputQueue`.
-
-The current `parseFrame()` method (which waits for `0xA0`) must be repurposed or removed for the RX path.
-
-### 4.2 — Command Set — Full Implementation
-
-All implementations must follow the side-effect behaviour in `ies_task.cpp::btspp_recv_task_fxn()`. No guessing.
-
-**iES-inherited commands (all need implementation):**
-
-| Byte | Name | Payload | Implementation |
-|------|------|---------|----------------|
-| `'b'` (0x62) | START_STREAMING | none | `ads1299.startADS()`; gate removed from `setup()` (wrap unconditional start in `#ifdef DEBUG_ENABLE`); `g_runtimeState.setStreamingEnabled(true)` |
-| `'s'` (0x73) | STOP_STREAMING | none | `ads1299.stopADS()` or block DRDY semaphore; `g_runtimeState.setStreamingEnabled(false)` |
-| `'t'` (0x74) | TIME_SYNC | 4 B epoch + 1 B CRC | Verify CRC-8 (SHT75); extract uint32 BE epoch; store time offset |
-| `'.'` (0x2E) | HEARTBEAT | none | Log and return OK; no side effects |
-| `'d'` (0x64) | DOWNSAMPLING | 1 B factor | `g_runtimeState.setDownsamplingFactor(N)`; persist |
-| `'Z'` (0x5A) | IMPEDANCE ON | none | `ads1299.streamSafeLeadOffSetForChannel(3,0,1)` and `(4,0,1)`; `g_runtimeState.setImpedanceCheckEnabled(true)` |
-| `'z'` (0x7A) | IMPEDANCE OFF | none | `ads1299.streamSafeLeadOffSetForChannel(3,0,0)` and `(4,0,0)` |
-| `'p'` (0x70) | MODE/PRINT | 1 B sub-cmd | `'o'`→OpenBCI raw mode; `'i'`→iES µV mode; `'e'/'a'/'b'/'g'/'h'/'d'`→CSV debug print |
-| `'v'` (0x76) | SOFT_RESET | none | Send OpenBCI banner via **raw UART write** (not packetiser); re-init ADS1299 |
-
-**Nicla-specific commands (already in `CommandId` enum, need implementation):**
-
-| Byte | Name | Payload | Implementation |
-|------|------|---------|----------------|
-| `0x10` | SET_ODR | 1 B ODR code | `ads1299.setSampleRate(code)`; `g_runtimeState.setSampleRate(code)`; persist |
-| `0x11` | SET_GAIN | 2 B: ch + gain | `ads1299.writeChannelSettings(ch, gain)`; `g_runtimeState.setChannelGain(ch, gain)`; persist |
-| `0x20` | ENABLE_UART | 1 B | Toggle `g_runtimeState`; `gatewayTask` reads flag |
-| `0x21` | ENABLE_BLE | 1 B | Toggle `g_runtimeState`; `gatewayTask` reads flag |
-| `0x30` | QUERY_STATUS | none | Return 10-byte payload: version(2B), ODR, gain[4], channel_mask, output_mode, streaming |
-
-**Nicla-specific commands missing from `cmd_handler.h` — must be added:**
-
-| Byte | Name | Payload | Implementation |
-|------|------|---------|----------------|
-| `0x12` | SET_OUTPUT_MODE | 1 B (0=raw, 1=µV) | `g_runtimeState.setOutputMode()`; `PersistentConfig::save()` |
-| `0x13` | SET_CHANNEL_MASK | 1 B bitmask | `g_runtimeState.setChannelMask()`; update `ies_channel_select`; persist |
-| `0x31` | SAVE_CONFIG | none | `PersistentConfig::save(g_runtimeState)` explicitly |
-
-### 4.3 — EEG TX Path Fixes
-
-| Item | File | Change |
-|------|------|--------|
-| µV conversion | `packetiser.cpp::serialiseEeg()` | Branch on `g_runtimeState.getOutputMode()`: iES → apply `EEG_SCALE_UV / gain`; raw → pass through |
-| Channel selection | `packetiser.cpp::serialiseEeg()` | Use `ies_channel_select.h`; default = CH3+CH4 (iES compat); runtime-configurable via `CMD_SET_CHANNEL_MASK` |
-| Downsampling | `packetiser.cpp::run()` | Skip N-1 of N samples using `g_runtimeState.getDownsamplingFactor()`; default = 4 |
-| `serialiseTimeSync()` encoding | `packetiser.cpp` | Change `ts_us`/`sample_cnt` from LE to BE; change type byte from `0x51` to `0x71` |
-| `serialiseResponse()` type | `packetiser.cpp` | Change type nibble from 4 to 6 |
-
-### 4.4 — RuntimeState Full Implementation
-
-All stubs in `runtime_state.cpp` must be implemented. Enable `MBED_ENABLED` (uncomment the `#define` in `runtime_state.h`).
-
-Default values to use on first boot (no EEPROM):
-- `_outputMode = OUTPUT_MODE_IES` (µV)
-- `_downsamplingFactor = 4`
-- `_channelGain[*] = ADS_GAIN01` (×1)
-- `_channelActive[0..3] = {false, false, true, true}` (CH3+CH4 only, production mode)
-- `_streamingEnabled = false`
-
-### 4.5 — PersistentConfig Implementation
-
-Create `persistent_config.h` and `persistent_config.cpp`. Layout and API are fully designed in `firmware_architecture.md` §12.4. Key points:
-- 18-byte EEPROM struct with magic `0xE1E50001` + CRC-16.
-- `load()`: verify magic + CRC; return false if invalid (triggers `reset()` call).
-- `save()`: read-before-write (only write bytes that changed).
-- `reset()`: write factory defaults + commit.
-- Called from `setup()` before any hardware init.
-
-### 4.6 — Response Format
-
-`serialiseResponse()` type nibble = **6** (not 4). Update the constant in `packetiser.cpp`.  
-Payload layout: `[cmd_id][status][data...]`.
-
-### 4.7 — Host Tools & Integration Test ✅ (2026-06-17, updated 2026-06-19)
-
-Host-side tools:
-
-| Tool | File | Purpose |
-|---|---|---|
-| `FirmwareTestApp.py` | `firmware/uartLogger/FirmwareTestApp.py` | GUI monitor: live EEG plot, event log, full command panel |
-| `ies_protocol.py` | `firmware/uartLogger/ies_protocol.py` | Shared protocol library (parser, decoder, CRC, command builders) |
-| `test_logic.py` | `firmware/uartLogger/test_logic.py` | Logic-only correctness (11 tests, 1 s settle) |
-| `test_timing.py` | `firmware/uartLogger/test_timing.py` | Per-command RTT table (no pass/fail on speed) |
-| `test_sequences.py` | `firmware/uartLogger/test_sequences.py` | Command ordering, streaming gate, persistence (`--include-reset`) |
-| `test_streaming.py` | `firmware/uartLogger/test_streaming.py` | EEG fps, wireframe format, continuity, TIME_SYNC, stress DS×4→×2→×1 |
-| `firmware_autotest.py` | `firmware/uartLogger/firmware_autotest.py` | Legacy combined suite (superseded for daily use) |
-
-**Recommended test invocation (run separately, in order):**
-```
-python firmware/uartLogger/test_logic.py
-python firmware/uartLogger/test_timing.py
-python firmware/uartLogger/test_sequences.py
-python firmware/uartLogger/test_streaming.py
-```
-Optional: `python firmware/uartLogger/test_sequences.py --include-reset` (flash persistence + hardware RESET).
-
-**Implemented additions beyond the original plan:**
-- `CMD_DEMO = 0x40` — runtime-only mode: loads defaults, enables ADS1299 internal test signal, starts streaming. Payload byte selects transport (0=source, 1=UART, 2=BLE).
-- `CMD_RESET = 0x41` — `NVIC_SystemReset()` after a clean ADS1299 stop.
-- **Streaming command gate** in `executeCommand()`: during active streaming only `STOP_STREAMING`, `HEARTBEAT`, and `TIME_SYNC` are accepted; all others return `ERR_NOT_ALLOWED`. Config and status queries (`QUERY_STATUS`, `GET_VERSION`, setters, etc.) must be issued before START or after STOP.
-- **Lazy ODR application**: `cmdSetOdr` stores the new rate in RuntimeState only; hardware CONFIG1 register is written in `cmdStartStreaming` just before `ads1299.startADS()`, ensuring no SPI activity outside a controlled start sequence.
-- `IES_CMD_PAYLOAD_MAX` raised from 8 → 12 to accommodate the 10-byte `QUERY_STATUS` response payload.
 
 ---
 
@@ -367,31 +202,30 @@ Optional: `python firmware/uartLogger/test_sequences.py --include-reset` (flash 
 - Host test suite: **all four scripts pass @ 460800 baud** (logic, timing, sequences, streaming + stress ramp)
 
 **Prerequisites still open before BLE coding:**
-- Enable `MBED_ENABLED` in `runtime_state.h` for multi-writer mutex (KI-001)
+- ~~Enable `MBED_ENABLED` in `runtime_state.h` for multi-writer mutex~~ — **KI-001 resolved**: `MBED_ENABLED` is already defined unconditionally; mutex is active.
 
 **Notes:**
 - Nicla Voice uses nRF52832 with SoftDevice S132; BLE via Mbed BLE API (see `ble_channel_design.md`).
-- `ble_channel.h` / `ble_channel.cpp` are stubs — `run()` sleeps indefinitely.
-- `CMD_ENABLE_BLE` (0x21) is a stub; GatewayTask BLE routing not wired.
+- `ble_channel.h` / `ble_channel.cpp` — Stage 2 GATT service implemented (disabled by `FEATURE_BLE_ENABLE = 0`); TX aggregation loop is a stub sleeping indefinitely.
+- `CMD_ENABLE_BLE` (0x21) is implemented; toggles GatewayTask BLE routing flag.
 - Full staged plan: `ble_channel_design.md` §9 (Stages 1–5).
 
 ### 5.1 — BLE Service Design
 
-- **Service UUID:** Custom 128-bit UUID (to be defined, compatible with iES if applicable).
+- **Service UUID:** `A9E07020-0001-4A58-B8C9-3F0DAB7E5C1D`
 - **Characteristics:**
-  - `EEG_DATA` (Notify): streams WireFrames; client subscribes to notifications.
-  - `COMMAND` (Write): host writes command bytes; `BleChannelTask` forwards to Gateway.
-  - `RESPONSE` (Read/Notify): device sends command responses.
-- **Pairing:** Bonding with MITM protection (passkey); store bond info in flash.
+  - TX (Notify): `A9E07020-0002-4A58-B8C9-3F0DAB7E5C1D` — streams WireFrames; client subscribes to notifications.
+  - RX (Write no response): `A9E07020-0003-4A58-B8C9-3F0DAB7E5C1D` — host writes command bytes; `BleChannelTask` forwards to Gateway.
+- **Library:** Mbed OS BLE API (`ble/BLE.h`) — ArduinoBLE was rejected (see `ble_channel_design.md` §4).
+- **Pairing:** Just Works (Phase 1); static passkey (Phase 2). See `ble_channel_design.md` §3.4.
 
 ### 5.2 — Implementation Steps
 
-1. Implement `BleChannelTask::run()` using ArduinoBLE:
-   - Set up service + characteristics in `setup()`.
-   - TX loop: dequeue `WireFrame` from `_txQueue`, fragment if `frame.len > ATT_MTU - 3`, write notification.
-   - RX: handle `BLEWritten` callback, parse IES frame, push `Command` to `gatewayTask.getUartCommandQueue()`.
-2. Enable `MBED_ENABLED` in `runtime_state.h` and verify mutex guards are active.
-3. Test with nRF Connect app on Android/iOS before integrating with host software.
+1. Enable `FEATURE_BLE_ENABLE = 1` in `config.h` (Stage 2 GATT code is already written in `ble_channel.cpp`).
+2. Implement TX aggregation loop in `BleChannelTask::run()` per `ble_channel_design.md` §5.4.
+3. Implement RX `feedRxByte()` IES frame parser per `ble_channel_design.md` §5.6.
+4. ~~Enable `MBED_ENABLED` in `runtime_state.h`~~ — already active (KI-001 resolved); mutex guards are in place.
+5. Test with nRF Connect app on Android/iOS before integrating with host software.
 
 ---
 
@@ -414,18 +248,11 @@ Optional: `python firmware/uartLogger/test_sequences.py --include-reset` (flash 
 | 2026-06 | Reassign Nicla-only type nibbles to 6–15 (away from iES 0–5) | Early implementation collided: RESPONSE=type 4 (iES EDA) and TIME_SYNC=type 5 (iES BATT_INFO). Corrected to RESPONSE=type 6, TIME_SYNC=type 7, ML_OUTPUT=type 8. iES host will silently discard unknown types ≥6. See `ies_message_protocol.md` §10. |
 | 2026-06 | TIME_SYNC is dual-direction and both work without conflict | iES `'t'` command (host→device, sets RTC) and Nicla proactive frame (device→host, type 7) coexist. iES host sends `'t'` and ignores type-7 responses. New BLE host uses both. `cmdTimeSync()` and `serialiseTimeSync()` are independent code paths. |
 | 2026-06 | `ads1299.startADS()` removed from `DEBUG_ENABLE` setup block | Auto-starting ADS1299 flooded the USB CDC TX buffer with EEG frames, saturating `availableForWrite()` so `debugTryPrint()` silently dropped all debug messages and delayed command responses by ~1.5 s. Streaming now always starts via explicit `'b'` command only. |
-| 2026-06-19 | USB CDC baud rate fixed at **921600** (was 1 000 000) | At 1 Mbaud the Windows CDC driver corrupted serial data (e.g., gain code `0x11` read back as ×17 — the SET_GAIN command byte itself). 921600 baud passes logic tests consistently. |
 | 2026-06-19 | Strategic test suite: four scripts (`test_logic`, `test_timing`, `test_sequences`, `test_streaming`) | Separates logic validation, timing characterisation, command interaction, and streaming performance. Run one at a time; 1 s settle between commands. |
-| 2026-06-19 | Host retry policy: up to 3 attempts on UART timeout | Mitigates ~3–7% byte drops at 921600 baud; wrong-status retries do not fix corruption (e.g. ×17 gain). |
-| 2026-07-03 | Temporarily use **115200 baud** for command test validation on Windows CDC | Logic **11/11** and sequences **8/8** pass @ 115200; failed @ 921600. Streaming TBD. |
 | 2026-07-04 | BLE Stage 1: `FrameDest` unicast routing | `WireFrame.dest` UART/BLE only; Gateway typed queues; Packetiser `activeStreamDest()`; ENABLE_UART/BLE mutual exclusivity. |
 | 2026-07-04 | Phase 3 analog validation complete | Function generator on real channels; production mode CH3+CH4 confirmed before BLE Stage 1. |
 | 2026-07-04 | Production UART baud **460800** (4×115200) | All four test scripts pass: logic 11/11, sequences 8/8, timing 0 timeouts, streaming + stress DS×4→×2→×1. DS×2 failed @ 115200 (bandwidth); stable @ 460800. UART Phase 4 complete → BLE Stage 1. |
-| 2026-07-04 | BLE Stage 2 task bring-up verified | `BLE_RADIO_INIT_ENABLE=0`; BleChannelTask run() + loop logging OK. Radio init must use run() thread only. |
 | 2026-07-04 | BLE Stage 2: stack init + GATT service | Mbed BLE API, EventQueue thread, TX notify / RX write, advertising as NICLA_EEG. |
-| 2026-06-19 | `stop_and_drain()` after live stream | STOP + 0.5 s serial drain + QUERY_STATUS verify; prevents SET_GAIN timeout from EEG backlog on USB CDC. |
-| 2026-06 | Add `CMD_SET_OUTPUT_MODE = 0x12` and `CMD_SET_CHANNEL_MASK = 0x13` to `CommandId` | These are the two settings that control iES compatibility mode: µV output and 2-channel selection. Not yet in `cmd_handler.h`. Both must persist via `PersistentConfig::save()`. |
-| 2026-06 | All command handler implementations must follow iES v0.3 reference behaviour | `ies_task.cpp::btspp_recv_task_fxn()` is the ground truth for side effects of each command. No guessing. |
 | 2026-06 | Add `CMD_DEMO = 0x40` and `CMD_RESET = 0x41` as binary protocol commands | Initial design proposed text-based triggers (`"demo"`, `"reset"`); rejected due to collision risk with bare-byte parser. Binary commands integrated cleanly into existing `payloadLenForCmd()` table. |
 | 2026-06 | Streaming command gate: whitelist-only during active stream | Prevents SPI race and keeps the command path minimal while EEG is streaming. Allowed during streaming: **STOP**, **HEARTBEAT**, **TIME_SYNC** only. `QUERY_STATUS` and `GET_VERSION` blocked — query before START or after STOP. |
 | 2026-06 | Lazy hardware ODR application — defer CONFIG1 write to stream-start | Writing ADS1299 CONFIG1 from `cmdSetOdr` (outside streaming) triggered spurious DRDY pulses, waking EegAcquisitionTask and causing SPI contention. ODR now stored in RuntimeState only; `cmdStartStreaming` applies full hardware state (`setSampleRate` + `applyToHardware`) before `startADS()`. |
@@ -440,15 +267,8 @@ Optional: `python firmware/uartLogger/test_sequences.py --include-reset` (flash 
 
 | ID | Severity | Description | Resolution |
 |---|---|---|---|
-| NOTE-006 | Fixed | `Serial.print(float)` in UartChannelTask caused stack overflow under Mbed USB CDC | Stack sizes increased in `config.h`; `float` prints avoided in hot paths |
 | NOTE-007 | Fixed | nRF52832 has no hardware EEPROM — persistent config uses flash-emulated EEPROM | Implemented with Mbed OS `FlashIAP` directly (not `EEPROM.h`). 18-byte struct with magic `0xE1E50001` + CRC-16; read-before-write strategy. |
 | NOTE-008 | Fixed | iES native protocol sends integer µV, not raw ADC codes | `OutputMode` enum + `serialiseEeg()` µV conversion implemented. Default = iES µV. OpenBCI raw mode available via `CMD_SET_OUTPUT_MODE` or `p`+`i` command. |
-| KI-001 | Medium | `MBED_ENABLED` guard in `runtime_state.h` is commented out — mutex is inactive | Enable before BLE/multi-writer testing in Phase 5 |
-| KI-002 | Low | `BleChannelTask` is a header-only stub; `ble_channel.cpp` contains no implementation | Address in Phase 5 |
-| KI-003 | Fixed | `CMD_SET_GAIN` did not persist gain across soft reset | Resolved by `PersistentConfig::save()` integration in Phase 3.4 |
+| KI-001 | Fixed | `MBED_ENABLED` guard in `runtime_state.h` was thought to be commented out | `MBED_ENABLED` is `#define`'d unconditionally in `runtime_state.h`; mutex guards are always active. |
+| KI-002 | Low | `BleChannelTask` TX aggregation loop not yet implemented; GATT service (Stage 2) written but `FEATURE_BLE_ENABLE = 0` | Address in Phase 5 — enable flag and implement TX loop |
 | KI-004 | Low | Impedance `cmdImpedanceOn/Off` only sets runtime flag; no ADS1299 LOFF register writes | Phase 5 or later: implement `ads1299.streamSafeLeadOffSetForChannel()` calls |
-| KI-005 | Fixed | `time_sync_valid` CRC mismatch before `ies_crc8_sht75` rename | Fixed 2026-06-17; passes in `test_logic.py` at 921600 baud |
-| KI-006 | Fixed | Intermittent `stop_unblocks_config`: gain readback ×17 | UART corruption at 921600; stable @ 115200 and @ 460800 (2026-07-04) |
-| KI-007 | Fixed | `test_streaming.py` continuity false fail | Host USB CDC batching; fixed with frame-counter checks (NOTE-010, 2026-07-04) |
-| KI-008 | Low | `firmware_autotest.py` SLAs/timeouts outdated (5.5 s START) | Superseded by strategic suite; update or retire if still needed |
-| NOTE-011 | Fixed | OpenVIBE `CDriveriES` driver incompatible with Modern-mode Nicla: `'t'` framing bug, unexpected RESPONSE/TIME_SYNC frame types, fixed 2ch parsing, hardcoded 115200 baud | `HostProtocolMode::LEGACY_IES` (`CMD_SET_HOST_MODE = 0x14`) makes the device iES-pure + 115200 baud on demand; Modern mode (default) unchanged. See `ies_message_protocol.md` §12 and NOTE-011. |

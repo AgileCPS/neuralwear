@@ -168,7 +168,7 @@ and `endTransaction()` is called in `csHigh()`.
 | | |
 |---|---|
 | **Date** | 2026-03-07 |
-| **Scope** | `test/SPI_Test/ADS1299_Library.cpp` vs `code_references/iES/ADS_1299_Library.cpp` |
+| **Scope** | `firmware/src/ADS1299_Library.cpp` |
 | **Author** | Review via GitHub Copilot |
 
 ---
@@ -513,43 +513,59 @@ a few seconds (observed as a complete MCU hang with LED blinking stopped).
 
 ---
 
-### Fix #2 — Semaphore-based wake-up at the IQueue abstraction layer
+### Fix #2 — INotifiable / setOwner() wake-up at the IQueue abstraction layer
 
-`FifoQueue<T,N>::push()` was extended to optionally hold a pointer to a
-`rtos::Semaphore`. After the mutex is released, if the pointer is set, the
-semaphore is released once:
+`FifoQueue<T,N>` holds a non-owning `INotifiable*` back-pointer to its owner task.
+After releasing the mutex in `push()`, if `_owner` is set and the fill level has
+reached `TASK_WAKE_THRESHOLD_PCT` (default 0 = every push), it calls:
 
 ```cpp
-// fifo_queue.h — FifoQueue::push() (after mutex unlock)
-if (_notifySem) {
-    _notifySem->release();
+// fifo_queue.h — FifoQueue::push() (after _mutex.unlock())
+if (_owner) {
+    _owner->notify();   // INotifiable interface — implemented by BaseTask
 }
 ```
 
-Each consumer task owns a semaphore and registers it with its input queue(s)
-during construction:
+`BaseTask` implements `INotifiable` by releasing a binary semaphore:
 
 ```cpp
-// uart_channel.cpp constructor
-_txQueue.setNotifySemaphore(&_txReady);
-
-// stream_mux.cpp constructor — all three input queues share one semaphore
-_eegQueue.setNotifySemaphore(&_dataReady);
-_mlQueue.setNotifySemaphore(&_dataReady);
-_responseQueue.setNotifySemaphore(&_dataReady);
-
-// gateway.cpp constructor
-_dataQueue.setNotifySemaphore(&_dataReady);
-_cmdFromUartQueue.setNotifySemaphore(&_dataReady);
-_cmdFromBleQueue.setNotifySemaphore(&_dataReady);
-
-// cmd_handler.cpp constructor
-_cmdQueue.setNotifySemaphore(&_cmdReady);
+// task.cpp — BaseTask::notify()
+void BaseTask::notify() {
+    _wakeSem.release();   // rtos::Semaphore — count capped at 1 (binary)
+}
 ```
 
-The semaphore release is intentionally performed **after** `_mutex.unlock()`,
-not inside the locked section, to avoid holding the queue mutex while entering
-the OS semaphore layer.
+Each consumer task calls `queue.setOwner(this)` in its constructor to register itself:
+
+```cpp
+// PacketiserTask constructor — all three input queues wake the same task
+_eegQueue.setOwner(this);
+_responseQueue.setOwner(this);
+_mlQueue.setOwner(this);
+
+// GatewayTask constructor
+_dataQueue.setOwner(this);
+_cmdFromUartQueue.setOwner(this);
+_cmdFromBleQueue.setOwner(this);
+
+// UartChannelTask constructor
+_txQueue.setOwner(this);
+
+// CommandHandlerTask constructor
+_cmdQueue.setOwner(this);
+```
+
+Consumer tasks idle via `sleepUntilNotified()` (defined in `BaseTask`):
+
+```cpp
+// task.h — BaseTask::sleepUntilNotified()
+void BaseTask::sleepUntilNotified(uint32_t timeout_ms) {
+    _wakeSem.try_acquire_for(std::chrono::milliseconds(timeout_ms));
+}
+```
+
+The `notify()` release is performed **after** `_mutex.unlock()`, not inside the
+locked section, to avoid holding the queue mutex while entering the OS semaphore layer.
 
 ---
 
@@ -559,13 +575,13 @@ the OS semaphore layer.
 ADS1299 DRDY ──► ISR ──► _drdySemaphore.release()
                                │
                     EegAcquisitionTask wakes (osPriorityRealtime)
-                    distribute() ──► _eegQueue.push() ──► _dataReady.release()
+                    distribute() ──► _eegQueue.push() ──► _owner->notify()
                                                                │
-                                                StreamMuxTask wakes (osPriorityAboveNormal)
-                                                distribute() ──► _dataQueue.push() ──► _dataReady.release()
+                                                PacketiserTask wakes (osPriorityAboveNormal)
+                                                distribute() ──► _dataQueue.push() ──► _owner->notify()
                                                                                             │
                                                                                GatewayTask wakes (osPriorityNormal)
-                                                                               _txQueue.push() ──► _txReady.release()
+                                                                               _txQueue.push() ──► _owner->notify()
                                                                                                         │
                                                                                           UartChannelTask wakes (osPriorityNormal)
 ```
@@ -581,10 +597,10 @@ The same two-branch pattern is used in every task loop:
 
 | Task | Idle path | Busy path |
 |------|-----------|-----------|
-| `UartChannelTask` | `_txReady.try_acquire_for(1ms)` | `yield()` |
-| `StreamMuxTask` | `_dataReady.try_acquire_for(1ms)` | `yield()` before `continue` |
-| `GatewayTask` | `_dataReady.try_acquire_for(1ms)` | `yield()` |
-| `CommandHandlerTask` | `_cmdReady.try_acquire_for(1ms)` | `yield()` |
+| `UartChannelTask` | `sleepUntilNotified(1)` | loop continues without sleeping |
+| `PacketiserTask` | `sleepUntilNotified(1)` | loop continues without sleeping |
+| `GatewayTask` | `sleepUntilNotified(1)` | loop continues without sleeping |
+| `CommandHandlerTask` | `sleepUntilNotified(1)` | loop continues without sleeping |
 | `EegAcquisitionTask` | `_drdySemaphore.acquire()` (no timeout; DRDY-driven) | — |
 
 `EegAcquisitionTask` is purely interrupt-driven and was already correct; no
@@ -594,22 +610,21 @@ changes were required.
 
 ### Key Design Decisions
 
-1. **`try_acquire_for` not `acquire`**: the 1 ms timeout is a safety fallback so
-   tasks remain responsive to `_stopRequested` even if a semaphore release is
+1. **`sleepUntilNotified(1)` not `sleepUntilNotified(0)`**: the 1 ms timeout is a safety
+   fallback so tasks remain responsive to `_stopRequested` even if a `notify()` call is
    somehow missed (e.g. during task tear-down).
 
-2. **Semaphore release after mutex unlock**: releasing inside the locked section
-   would mean the woken consumer immediately contends on a mutex still held by
-   the producer — an unnecessary priority inversion.
+2. **`notify()` after mutex unlock**: `FifoQueue::push()` calls `_owner->notify()` after
+   releasing `_mutex`, not inside the locked section.  This prevents the woken consumer
+   from immediately contending on a mutex still held by the producer.
 
-3. **Multiple queues, one semaphore** (StreamMux, Gateway): tasks that consume
-   from more than one queue share a single semaphore rather than `try_acquire`
-   looping over multiple. Any queue becoming non-empty wakes the task; the loop
-   then drains whichever queues have data.
+3. **Multiple queues, one owner task** (PacketiserTask, GatewayTask): tasks that consume
+   from more than one queue register themselves (`setOwner(this)`) on all their input
+   queues.  Any queue becoming non-empty calls `notify()` on the same `BaseTask` instance,
+   waking the consumer once; the run loop then drains whichever queues have data.
 
-4. **`IQueue::setNotifySemaphore` default no-op**: the virtual method has an
-   empty default body, so existing code not wired to a semaphore compiles and
-   behaves exactly as before.
+4. **`IQueue::setOwner` default no-op**: the virtual method has an empty default body in
+   `IQueue<T>`, so queues not wired to any task compile and behave correctly with no owner.
 
 *End of NOTE-005*
 
@@ -694,9 +709,6 @@ All `#ifdef DEBUG_ENABLE` guards remain in place; only the inner
 path (`Serial.write()` in `uart_channel.cpp`) does not hold `gSerialMutex` and
 is unaffected.
 
-> **This is a temporary fix.** A better long-term solution (e.g. dedicated
-> low-priority debug task with its own non-blocking ring buffer) is to be
-> designed separately.
 
 ---
 
@@ -704,15 +716,15 @@ is unaffected.
 
 | File | Change |
 |---|---|
-| `firmware/ADS1299NiclaFW/uart_channel.cpp` | Stack 1024→2048; all blocking debug prints replaced with `debugTryPrint()` |
-| `firmware/ADS1299NiclaFW/task.h` | Added `debugTryPrint()` declaration; `gSerialMutex` `extern` declaration — both inside `#ifdef DEBUG_ENABLE` |
-| `firmware/ADS1299NiclaFW/task.cpp` | `gSerialMutex` definition; `debugTryPrint()` implementation — both inside `#ifdef DEBUG_ENABLE` |
-| `firmware/ADS1299NiclaFW/eeg.cpp` | Blocking debug prints replaced with `debugTryPrint()` |
-| `firmware/ADS1299NiclaFW/packetiser.cpp` | Blocking debug prints replaced with `debugTryPrint()` |
-| `firmware/ADS1299NiclaFW/gateway.cpp` | Blocking debug prints replaced with `debugTryPrint()` |
-| `firmware/ADS1299NiclaFW/cmd_handler.cpp` | Blocking debug prints replaced with `debugTryPrint()` |
-| `firmware/ADS1299NiclaFW/ADS1299NiclaFW.ino` | Heap-free report in `loop()` replaced with `debugTryPrint()` |
-| `firmware/ADS1299NiclaFW/config.h` | `DEBUG_ENABLE` set to `1`; added `UART_BACKPRESSURE_SLEEP_MS 5` |
+| `firmware/src/uart_channel.cpp` | Stack 1024→2048; all blocking debug prints replaced with `debugTryPrint()` |
+| `firmware/src/task.h` | Added `debugTryPrint()` declaration; `gSerialMutex` `extern` declaration — both inside `#ifdef DEBUG_ENABLE` |
+| `firmware/src/task.cpp` | `gSerialMutex` definition; `debugTryPrint()` implementation — both inside `#ifdef DEBUG_ENABLE` |
+| `firmware/src/eeg.cpp` | Blocking debug prints replaced with `debugTryPrint()` |
+| `firmware/src/packetiser.cpp` | Blocking debug prints replaced with `debugTryPrint()` |
+| `firmware/src/gateway.cpp` | Blocking debug prints replaced with `debugTryPrint()` |
+| `firmware/src/cmd_handler.cpp` | Blocking debug prints replaced with `debugTryPrint()` |
+| `firmware/src/src.ino` | Heap-free report in `loop()` replaced with `debugTryPrint()` |
+| `firmware/src/config.h` | `DEBUG_ENABLE` set to `1`; added `UART_BACKPRESSURE_SLEEP_MS 5` |
 
 *End of NOTE-006*
 
@@ -721,7 +733,7 @@ is unaffected.
 ## NOTE-007 — nRF52832 Has No Hardware EEPROM: Flash-Emulated Persistent Storage
 
 **Date:** 2026-05-09  
-**Scope:** `firmware/ADS1299NiclaFW/` — persistent configuration design  
+**Scope:** `firmware/src/` — persistent configuration design  
 **Trigger:** Design of PersistentConfig module for output-mode, gain, ODR, channel mask
 
 ### Summary
@@ -735,19 +747,29 @@ Persistent storage must therefore be emulated in flash.
 
 ---
 
-### Arduino Mbed Core EEPROM Emulation
+### FlashIAP Direct Implementation
 
-The `ArduinoCore-mbed` provides `<EEPROM.h>` for Nicla-family boards, backed by
-Mbed's `FlashIAP` API. It reserves one or more flash pages at the high end of
-flash for emulated EEPROM.
+The firmware uses Mbed OS `FlashIAP` (`#include "FlashIAP.h"`) directly — not
+the `<EEPROM.h>` Arduino wrapper. The 18-byte config block is stored at the
+start of the **last 4 KB sector** of the 512 KB internal NOR flash. The sector
+address is computed at first use:
 
 ```cpp
-#include <EEPROM.h>
+// persistent_config.cpp
+#include "FlashIAP.h"
+static mbed::FlashIAP s_flash;
 
-EEPROM.read(offset);           // returns uint8_t
-EEPROM.write(offset, value);   // uint8_t, erases + writes page if needed
-EEPROM.commit();               // flush pending writes to flash (required)
-EEPROM.length();               // total emulated size in bytes (typically 1024 B)
+// Flash I/O helpers (init/deinit per call to release peripheral during streaming):
+s_flash.init();
+s_flash.read(&layout, configAddr, sizeof(EepromLayout));
+s_flash.deinit();
+
+// Write path (read-before-write, then erase + program full 4 KB sector):
+s_flash.read(s_sectorBuf, addr, sectorSize);
+if (memcmp(s_sectorBuf + offset, src, sizeof(EepromLayout)) != 0) {
+    s_flash.erase(addr, sectorSize);
+    s_flash.program(s_sectorBuf, addr, sectorSize);
+}
 ```
 
 ### Flash Endurance and Wear-Protection Strategy
@@ -786,11 +808,11 @@ Offset  Size  Field                    Default
 ──────  ────  ─────────────────────────────────────────────────────────
  0       4    magic                    0xE1E50001
  4       1    schema_version           1
- 5       1    output_mode              1 = iES (µV)  [see NOTE-008]
+ 5       1    output_mode              1 = iES µV (OutputMode::UV)  [see NOTE-008]
  6       1    sample_rate              ADS1299_Library::SAMPLE_RATE_1000
- 7       1    downsampling_factor      1 (no downsampling)
+ 7       1    downsampling_factor      4  (1 kSPS ÷ 4 = 250 SPS effective)
  8       4    channel_gain[4]          ADS_GAIN01 (×1)  [see NOTE-008]
-12       1    channel_enable_mask      0b00001111 (all 4 channels active)
+12       1    channel_enable_mask      0b00001100 (CH3+CH4 only)
 13       1    uart_enabled_at_boot     1
 14       1    ble_enabled_at_boot      0
 15       1    host_protocol_mode       0 = MODERN  [see NOTE-011; was "reserved"]
@@ -806,8 +828,7 @@ Total: 18 bytes
 ## NOTE-008 — iES EEG Wire Format: µV Integer vs Raw ADC Codes, Default Gain and Output Mode
 
 **Date:** 2026-05-09  
-**Scope:** `firmware/ADS1299NiclaFW/packetiser.cpp`, `runtime_state.*`, `persistent_config.*`  
-**Sources:** `code_references/iES_v0.3-master/ies_app/ADS_1299_Library.cpp`,
+**Scope:** `firmware/src/packetiser.cpp`, `runtime_state.*`, `persistent_config.*`  
 `code_references/iES_v0.3-master/ies_app/ies_task.cpp`
 
 ### Summary
@@ -891,11 +912,11 @@ The only ×24 reference in `ies_task.cpp` is fully commented out — a developer
 
 #### Nicla port — already compatible
 
-`firmware/ADS1299NiclaFW/ADS1299_Library.cpp` line 133:
+`firmware/src/ADS1299_Library.cpp` line 133:
 ```cpp
 defaultChannelSettings[GAIN_SET] = ADS_GAIN01;  // identical to iES
 ```
-`ADS1299NiclaFW.ino` never modifies `GAIN_SET`. **Gain is already compatible with iES.**
+`src.ino` never modifies `GAIN_SET`. **Gain is already compatible with iES.**
 
 #### How to confirm at runtime
 
@@ -929,7 +950,6 @@ iES native mode (µV integer) is the default. OpenBCI mode is opt-in.
   `serialiseEeg()` before packing.
 - **Wire format stays identical** — the 24-bit big-endian packing is unchanged;
   only the value differs.
-- **WireframeMonitor.py** must apply the inverse: when mode = iES, CSV values
   are already µV; when mode = OpenBCI, multiply by `0.5364418669 / gain`.
 
 *End of NOTE-008*
@@ -939,35 +959,12 @@ iES native mode (µV integer) is the default. OpenBCI mode is opt-in.
 ## NOTE-009 · UART Test Suite Status and Known Flakiness (2026-06-19)
 
 **Date:** 2026-06-19 (updated 2026-07-04)  
-**Scope:** Host-side validation scripts in `firmware/uartLogger/`  
-**Firmware:** `ADS1299NiclaFW` v0.2.0 @ **460800 baud** USB CDC
+**Scope:** `firmware/src/uart_channel.h/.cpp` — UART protocol and baud behaviour  
+**Firmware:** `ADS1299NiclaFW` (`src.ino`) v0.2.0 @ **460800 baud** USB CDC
 
 ### Summary
 
 **UART Phase 4 validation complete (2026-07-04).** All four host test scripts pass @ **460800 baud**. BLE implementation has **not started** — next milestone is BLE Stage 1 per `ble_channel_design.md` §9.2.
-
-### Test matrix (2026-07-04 @ 460800)
-
-| Script | Tests | Result | Notes |
-|---|---|---|---|
-| `test_logic.py` | 11 command correctness tests | ✅ **11/11 pass** | 1 s settle; 5 s timeout |
-| `test_timing.py` | RTT for each command (10×) | ✅ **Complete** | 0 timeouts; SPI cmds ~20–22 ms mean |
-| `test_sequences.py` | 8 interaction scenarios | ✅ **8/8 pass** | Includes streaming gate, persistence |
-| `test_streaming.py` | Basic + stress DS×4→×2→×1 | ✅ **All pass** | Frame counter continuity; TIME_SYNC plots (NOTE-010) |
-
-### Known failures — all resolved
-
-**1. `stop_unblocks_config` @ 921600** — RESOLVED @ 115200 / 460800
-
-- Was UART corruption (`×17` = `0x11` command byte). Stable at lower baud.
-
-**2. `test_streaming.py` continuity** — RESOLVED (2026-07-04)
-
-- Root cause: USB CDC batching, not firmware. Fixed with frame-counter gap detection (NOTE-010).
-
-**3. Stress DS×2 @ 115200** — RESOLVED @ 460800
-
-- 500 wire fps exceeded 115200 bandwidth; 4× baud (460800) passes full stress ramp.
 
 ### Streaming command gate (firmware, 2026-06-19)
 
@@ -991,31 +988,8 @@ While streaming, **only** these commands are accepted:
 | 115 200 | ✅ Stable for commands; ❌ insufficient for DS×2 stress (500 wire fps) |
 
 `config.h` (as of 2026-07-09): `#define SERIAL_BAUD_MODERN 460800` /
-`#define SERIAL_BAUD_LEGACY 115200` — the latter is now runtime-selectable
+`#define SERIAL_BAUD_OPENVIBE 115200` — the latter is now runtime-selectable
 via `CMD_SET_HOST_MODE` without reflashing; see NOTE-011.
-
-### Historical updates
-
-**2026-07-04 @ 460800:** logic 11/11, sequences 8/8, timing 0 timeouts, streaming + stress ramp all pass. UART validation complete → BLE Stage 1.
-
-**2026-07-03 @ 115200:** logic and sequences pass; streaming basic pass; stress DS×2 fails.
-
-**2026-06-19 @ 921600:** intermittent command corruption.
-
-Both firmware and host scripts must use the same baud. As of 2026-07-09,
-the active baud (MODERN=460800 vs LEGACY_IES=115200) is selected at runtime
-by `CMD_SET_HOST_MODE` and persisted — no reflash required (NOTE-011).
-
-### Invocation
-
-```bash
-python firmware/uartLogger/test_logic.py
-python firmware/uartLogger/test_timing.py
-python firmware/uartLogger/test_sequences.py
-python firmware/uartLogger/test_streaming.py
-```
-
-Logs: `logs/test_*.txt`, `logs/timing_*.txt`, `logs/streaming_*.txt` (when scripts write them).
 
 *End of NOTE-009*
 
@@ -1053,9 +1027,6 @@ Any Windows receiver — **UART or BLE** — must implement:
 
 ### Reference code
 
-- `firmware/uartLogger/ies_protocol.py` — `compute_eeg_frame_gaps()`, `reconstruct_eeg_timestamps()`
-- `firmware/uartLogger/test_streaming.py` — continuity test (frame counter)
-- `firmware/uartLogger/plot.py` — full plotting pipeline
 
 ### Documentation cross-refs
 
@@ -1078,8 +1049,7 @@ continuity and plotting against reconstructed TIME_SYNC timestamps.
 
 **Date:** 2026-07-09  
 **Scope:** `runtime_state.h/.cpp`, `cmd_handler.h/.cpp`, `uart_channel.h/.cpp`,
-`packetiser.cpp`, `persistent_config.h/.cpp`, `config.h`, `ADS1299NiclaFW.ino`,
-`firmware/uartLogger/ies_protocol.py`, `firmware/uartLogger/test_openvibe_compat.py`
+`packetiser.cpp`, `persistent_config.h/.cpp`, `config.h`, `src.ino`
 
 ### Summary
 
@@ -1091,17 +1061,12 @@ firmware/implementation details that doc doesn't.
 
 ### Why not just "always emit iES-pure frames"?
 
-Modern tooling (`ies_protocol.py`, all four `test_*.py` scripts) depends on
-`RESPONSE` acks for correctness checks (`send_cmd()` blocks on a matching
-ack) and on `TIME_SYNC` frames for timestamp reconstruction (NOTE-010). Making
-these unconditional would break every existing test script. Hence a runtime
-mode flag rather than a permanent behavior change.
+`MODERN` mode preserves `RESPONSE` acks and `TIME_SYNC` frames that host software depends on for correctness and timestamp reconstruction (NOTE-010). `LEGACY_IES` suppresses them to match the original iES contract OpenVIBE expects. Hence a runtime-switchable flag rather than a permanent behavior change.
 
 ### Where each piece of the OpenVIBE incompatibility was found
 
 All four issues in `ies_message_protocol.md` §12.1 were confirmed by reading
-`code_references/iES_OpenVIBE_driver/ovasCDriveriES.cpp` directly, not by
-inference:
+the driver source directly:
 - Time-sync framing bug: `resetBoard()` lines ~640–650 (`strlen()` on a
   6-byte buffer ending in `'\0'`).
 - Fixed 2-channel, type-nibble-blind parser: `parseByte()`'s
@@ -1126,8 +1091,8 @@ inference:
    i.e. after the ack WireFrame has actually been written to `Serial`.
    Applying it any earlier would flip the CDC line coding while the ack is
    still in flight at the old baud.
-3. **Boot-time ordering matters.** `ADS1299NiclaFW.ino::setup()` used to call
-   `Serial.begin(SERIAL_BAUD_RATE)` before `PersistentConfig::load()`. That
+3. **Boot-time ordering matters.** `src.ino::setup()` used to call
+   `Serial.begin(SERIAL_BAUD_MODERN)` before `PersistentConfig::load()`. That
    order had to flip — `PersistentConfig::load()` is flash-only (no `Serial`
    dependency) and now runs first so the persisted `host_protocol_mode` can
    pick the correct boot baud. The setup-log print statements that used to
@@ -1157,16 +1122,5 @@ inference:
    `sample_rate`/`downsampling_factor` to their factory defaults.
    `CMD_SET_ODR`/`CMD_DOWNSAMPLING` reject any other value with
    `ERR_NOT_ALLOWED` while `LEGACY_IES` is active.
-
-### Verification
-
-`firmware/uartLogger/test_openvibe_compat.py` replays OpenVIBE's exact byte
-sequence (via `IesUartClient.switch_host_mode()`, `build_time_sync_legacy()`)
-against real hardware and asserts every frame on the wire is a pure 10-byte
-2-channel EEG frame, then performs a `CMD_SAVE_CONFIG` + hardware `CMD_RESET`
-to confirm the boot-time reorder (point 3 above) actually applies the
-persisted mode. It always attempts to restore `MODERN` mode on exit
-(pass or fail) so it doesn't strand the device at 115200 for the other four
-test scripts.
 
 *End of NOTE-011*

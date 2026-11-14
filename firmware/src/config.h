@@ -39,10 +39,10 @@
 // >0 = batch wake-ups (reduces context switches for bulk producers).
 #define TASK_WAKE_THRESHOLD_PCT    0
 
-// ── EEG sample queues  (ADS1299_4_Sample = 24 B each) ─────────────────────
+// ── EEG sample queues  (ADS1299_4_Sample = 20 B each) ─────────────────────
 // Buffering time = depth / SPS.  At 1000 SPS, depth=64 → 64 ms of headroom.
 // Increase if the consumer task misses its scheduling slot under heavy load.
-#define FIFO_DEPTH_STREAMING      64   // EEG → PacketiserTask  (64 × 24 B = 1536 B)
+#define FIFO_DEPTH_STREAMING      64   // EEG → PacketiserTask  (64 × 20 B = 1280 B)
 #define FIFO_DEPTH_EEG_BLE        64   // EEG → BLE task   (future)
 #define FIFO_DEPTH_EEG_ML         32   // EEG → ML task    (future)
 #define FIFO_DEPTH_EEG_LOG        16   // EEG → log task   (future)
@@ -277,10 +277,10 @@
 
 #define NRF52832_RAM_TOTAL    65536
 
-#define RAM_USAGE_FIFOS   (FIFO_DEPTH_STREAMING * 24 + \
-                           FIFO_DEPTH_EEG_BLE   * 24 + \
-                           FIFO_DEPTH_EEG_ML    * 24 + \
-                           FIFO_DEPTH_EEG_LOG   * 24 + \
+#define RAM_USAGE_FIFOS   (FIFO_DEPTH_STREAMING * 20 + \
+                           FIFO_DEPTH_EEG_BLE   * 20 + \
+                           FIFO_DEPTH_EEG_ML    * 20 + \
+                           FIFO_DEPTH_EEG_LOG   * 20 + \
                            FIFO_DEPTH_CMD       * (3 + IES_CMD_PAYLOAD_MAX))
 
 #define RAM_USAGE_STACKS  (STACK_SIZE_ACQUISITION + STACK_SIZE_PACKETISER + \
