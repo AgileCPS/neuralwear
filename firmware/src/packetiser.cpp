@@ -49,6 +49,7 @@ PacketiserTask::PacketiserTask()
     // unblocks run() immediately after a push().
     _eegQueue.setOwner(this);
     _responseQueue.setOwner(this);
+    _batteryQueue.setOwner(this);
     _mlQueue.setOwner(this);
 }
 
@@ -117,7 +118,20 @@ void PacketiserTask::run() {
         }
 
         // ─────────────────────────────────────────────────────────────────────
-        // 3. Priority 2 — EEG samples (downsampling applied here)
+        // 3. Battery sample (OpenVIBE, about every 10 s). Taken before the EEG
+        //    step: that step ends the loop, so a pop after it does not run
+        //    while EEG samples are waiting.
+        // ─────────────────────────────────────────────────────────────────────
+        BatterySample batt;
+        if (_batteryQueue.pop(batt)) {
+            WireFrame frame = serialiseBattery(batt);
+            distribute(frame);
+            hasData = true;
+            continue;
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // 4. Priority 2 — EEG samples (downsampling applied here)
         // ─────────────────────────────────────────────────────────────────────
         ADS1299_4_Sample eeg;
         if (_eegQueue.pop(eeg)) {
@@ -135,7 +149,7 @@ void PacketiserTask::run() {
         }
 
         // ─────────────────────────────────────────────────────────────────────
-        // 4. Priority 3 — ML results (future)
+        // 5. Priority 3 — ML results (future)
         // ─────────────────────────────────────────────────────────────────────
         MLOutput ml;
         if (_mlQueue.pop(ml)) {
@@ -149,7 +163,7 @@ void PacketiserTask::run() {
         }
 
         // ─────────────────────────────────────────────────────────────────────
-        // 5. No data — block until a queue notifies via INotifiable
+        // 6. No data — block until a queue notifies via INotifiable
         // ─────────────────────────────────────────────────────────────────────
         if (!hasData) {
             sleepUntilNotified(1);
@@ -260,6 +274,26 @@ WireFrame PacketiserTask::serialiseEeg(const ADS1299_4_Sample& s) {
 
     *p++ = IES_FRAME_STOP;
     f.len = (uint8_t)(p - f.bytes);
+    f.dest = activeStreamDest();
+    return f;
+}
+
+// BATT_INFO: [A0][cnt][0x51][percent*100 3B BE][C0] = 7 B
+// percent is nicla::getBatteryVoltagePercentage() (percent of VBATREG),
+// not a MAX17043 SoC. The wire unit is still 0.01 percent, so 80 is 8000.
+WireFrame PacketiserTask::serialiseBattery(const BatterySample& s) {
+    int32_t socTimes100 = (int32_t)s.percent * 100;
+
+    WireFrame f;
+    uint8_t* p = f.bytes;
+    *p++ = IES_FRAME_START;
+    *p++ = _frameCnt++;
+    *p++ = (uint8_t)((IES_SAMPLE_BATT_INFO << 4) | 1);
+    *p++ = (uint8_t)((socTimes100 >> 16) & 0xFF);
+    *p++ = (uint8_t)((socTimes100 >>  8) & 0xFF);
+    *p++ = (uint8_t)(socTimes100 & 0xFF);
+    *p++ = IES_FRAME_STOP;
+    f.len = (uint8_t)(p - f.bytes);  // 7
     f.dest = activeStreamDest();
     return f;
 }

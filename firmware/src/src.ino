@@ -10,6 +10,7 @@
 #include "config.h"            // Centralized application configuration
 #include "ADS1299_Library.h"   // ADS1299 driver (ported from iES_v0.3-master)
 #include "eeg.h"               // ADS1299_4_Sample, EegAcquisitionTask, eegAcquisitionTask
+#include "battery.h"           // BatterySample, BatteryTask, batteryTask
 #include "packetiser.h"        // PacketiserTask, packetiserTask
 #include "gateway.h"           // GatewayTask, gatewayTask
 #include "uart_channel.h"      // UartChannelTask, uartChannelTask
@@ -118,6 +119,7 @@ void setup() {
     // Wire tasks together (subscription pattern)
     // EegAcquisitionTask → PacketiserTask (EEG samples)
     eegAcquisitionTask.subscribe(packetiserTask.getEegQueue());
+    batteryTask.subscribe(packetiserTask.getBatteryQueue());
     
     // PacketiserTask → GatewayTask (IES wire frames)
     packetiserTask.subscribe(gatewayTask.getDataQueue());
@@ -162,7 +164,9 @@ void setup() {
     
     packetiserTask.start();
     // Serial.println("  [5/6] PacketiserTask started (priority: AboveNormal)");
-    
+
+    batteryTask.start();
+
     eegAcquisitionTask.start();
     // Serial.println("  [6/6] EegAcquisitionTask started (priority: Realtime)");
     // Serial.println("ADS1299 ready. Send 'b' to start streaming.");

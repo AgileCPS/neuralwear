@@ -29,6 +29,7 @@
 #include "mbed.h"
 #include "task.h"
 #include "eeg.h"
+#include "battery.h"
 #include "cmd.h"
 #include "config.h"
 #include "runtime_state.h"
@@ -105,9 +106,11 @@ struct MLOutput {
  *        (suppressed in HostProtocolMode::LEGACY_IES — see packetiser.cpp)
  *     2. Pop _responseQueue (highest priority) — serialise and dispatch
  *        (suppressed in LEGACY_IES except the CMD_SET_HOST_MODE ack itself)
- *     3. Pop _eegQueue — serialise and dispatch
- *     4. Pop _mlQueue (future) — serialise and dispatch
- *     5. sleepUntilNotified() if no data was available
+ *     3. Pop _batteryQueue — serialise and dispatch (before the EEG step,
+ *        so a waiting sample is still sent while EEG samples are queued)
+ *     4. Pop _eegQueue — serialise and dispatch
+ *     5. Pop _mlQueue (future) — serialise and dispatch
+ *     6. sleepUntilNotified() if no data was available
  *
  * THREAD SAFETY:
  *   All queues are thread-safe (IQueue uses rtos::Mutex).
@@ -115,9 +118,10 @@ struct MLOutput {
  */
 class PacketiserTask : public ProducerTask<WireFrame> {
 private:
-    // Input queues (owned by this task — all three call notify() on push)
+    // Input queues (owned by this task — each calls notify() on push)
     FifoQueue<ADS1299_4_Sample, FIFO_DEPTH_STREAMING>  _eegQueue;
     FifoQueue<Response, FIFO_DEPTH_RESPONSE>           _responseQueue;
+    FifoQueue<BatterySample, FIFO_DEPTH_BATTERY_QUEUE> _batteryQueue;
     FifoQueue<MLOutput, FIFO_DEPTH_ML_QUEUE>           _mlQueue;  // future
 
     // Per-stream frame counter (IES byte 1 — wraps at 255)
@@ -132,6 +136,7 @@ private:
 
     // IES serialisation helpers — each produces one WireFrame
     WireFrame serialiseEeg(const ADS1299_4_Sample& sample);
+    WireFrame serialiseBattery(const BatterySample& sample);
     WireFrame serialiseResponse(const Response& resp);
     WireFrame serialiseTimeSync(uint32_t ts_us, uint32_t sample_cnt);
     WireFrame serialiseMl(const MLOutput& ml);       // future
@@ -144,6 +149,7 @@ public:
 
     // Queue accessors — wired during setup() before start()
     IQueue<ADS1299_4_Sample>* getEegQueue()      { return &_eegQueue; }
+    IQueue<BatterySample>*    getBatteryQueue()  { return &_batteryQueue; }
     IQueue<Response>*         getResponseQueue() { return &_responseQueue; }
     IQueue<MLOutput>*         getMlQueue()       { return &_mlQueue; }
 };

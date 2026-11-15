@@ -62,6 +62,8 @@
 // ── Other queues ───────────────────────────────────────────────────────────
 #define FIFO_DEPTH_ML_QUEUE       16   // MLProcessor → PacketiserTask  (future)
 #define FIFO_DEPTH_RESPONSE        8   // CmdHandler → PacketiserTask response queue
+#define FIFO_DEPTH_BATTERY_QUEUE   2    // BatteryTask → PacketiserTask (2 × 1 B). 10 s period.
+#define BATTERY_PERIOD_MS          10000
 
 
 // =============================================================================
@@ -82,6 +84,7 @@
 #define TASK_PRIORITY_ML             osPriorityAboveNormal  // future
 #define TASK_PRIORITY_LOG            osPriorityLow          // future
 #define TASK_PRIORITY_COMMAND        osPriorityNormal       // future
+#define TASK_PRIORITY_BATTERY        osPriorityNormal       // 10 s poll; below Packetiser (AboveNormal)
 
 
 // =============================================================================
@@ -104,6 +107,7 @@
 #define STACK_SIZE_BLE_EVENT     2048  // BLE EventQueue dispatch thread (no GATT writes)
 #define STACK_SIZE_ML            2048  // future
 #define STACK_SIZE_LOG           1024  // printf-only, no deep calls
+#define STACK_SIZE_BATTERY       1024  // one PMIC I2C read and a queue push
 
 
 // =============================================================================
@@ -281,13 +285,14 @@
                            FIFO_DEPTH_EEG_BLE   * 20 + \
                            FIFO_DEPTH_EEG_ML    * 20 + \
                            FIFO_DEPTH_EEG_LOG   * 20 + \
-                           FIFO_DEPTH_CMD       * (3 + IES_CMD_PAYLOAD_MAX))
+                           FIFO_DEPTH_CMD       * (3 + IES_CMD_PAYLOAD_MAX) + \
+                           FIFO_DEPTH_BATTERY_QUEUE * 1)
 
 #define RAM_USAGE_STACKS  (STACK_SIZE_ACQUISITION + STACK_SIZE_PACKETISER + \
                            STACK_SIZE_GATEWAY     + STACK_SIZE_UART       + \
                            STACK_SIZE_CMD_HANDLER + STACK_SIZE_BLE        + \
                            STACK_SIZE_BLE_EVENT   + STACK_SIZE_ML         + \
-                           STACK_SIZE_LOG)
+                           STACK_SIZE_LOG         + STACK_SIZE_BATTERY)
 
 #define RAM_USAGE_ESTIMATED_TOTAL  (RAM_USAGE_FIFOS + RAM_USAGE_STACKS)
 
