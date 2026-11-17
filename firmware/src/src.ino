@@ -175,6 +175,19 @@ void setup() {
 void loop() {
     unsigned long now = millis();
 
+    // Once per 10 s of millis(). Steady green only while charge is done;
+    // leds.end() would power the driver down again.
+    static unsigned long lastFullCheckMs = ~0UL;
+    static bool fullyCharged = false;
+    if (now / 10000UL != lastFullCheckMs / 10000UL) {
+        lastFullCheckMs = now;
+        fullyCharged = nicla::getOperatingStatus() == OperatingStatus::ChargingComplete;
+        if (fullyCharged) {
+            nicla::leds.begin();
+            nicla::leds.setColor(green);
+        }
+    }
+
 #if FEATURE_BLE_ENABLE
     bleChannelTask.pollStatusLog(now);
 #endif
@@ -185,7 +198,7 @@ void loop() {
     static unsigned long lastToggleMs = 0;
     static bool          ledOn        = false;
 
-    if (now - lastToggleMs >= HEARTBEAT_LED_INTERVAL_MS) {
+    if (!fullyCharged && now - lastToggleMs >= HEARTBEAT_LED_INTERVAL_MS) {
         lastToggleMs = now;
         ledOn        = !ledOn;
         nicla::leds.begin();
