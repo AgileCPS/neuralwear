@@ -17,8 +17,8 @@
 /**
  * @brief One battery reading handed to PacketiserTask.
  *
- * percent is nicla::getBatteryVoltagePercentage(): percent of the regulated
- * full voltage, about 60 to 100, not fuel-gauge state of charge.
+ * percent is nicla::getBatteryVoltagePercentage() stretched from its
+ * 60–100% of VBATREG window onto 0–100. It is not a fuel-gauge state of charge.
  * sizeof == 1. RAM_USAGE_FIFOS counts FIFO_DEPTH_BATTERY_QUEUE * 1.
  */
 struct BatterySample {

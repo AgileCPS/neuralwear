@@ -279,8 +279,8 @@ WireFrame PacketiserTask::serialiseEeg(const ADS1299_4_Sample& s) {
 }
 
 // BATT_INFO: [A0][cnt][0x51][percent*100 3B BE][C0] = 7 B
-// percent is nicla::getBatteryVoltagePercentage() (percent of VBATREG),
-// not a MAX17043 SoC. The wire unit is still 0.01 percent, so 80 is 8000.
+// percent is the VBMON reading mapped from 60–100% of VBATREG onto 0–100.
+// The wire unit is still 0.01 percent, so 50 is 5000.
 WireFrame PacketiserTask::serialiseBattery(const BatterySample& s) {
     int32_t socTimes100 = (int32_t)s.percent * 100;
 

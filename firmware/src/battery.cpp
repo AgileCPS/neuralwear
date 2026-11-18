@@ -22,8 +22,13 @@ void BatteryTask::run() {
         if (g_runtimeState.isOpenVibeMode()) {
             int8_t percent = nicla::getBatteryVoltagePercentage();
             if (percent >= 0) {
+                // VBMON only covers 60–100% of VBATREG. Stretch that onto 0–100.
+                // map() does not clamp, so a reading outside that window is held
+                // at the ends.
+                long level = map(percent, 60, 100, 0, 100);
+                level = constrain(level, 0, 100);
                 BatterySample sample;
-                sample.percent = percent;
+                sample.percent = (int8_t)level;
                 distribute(sample);
             }
         }
