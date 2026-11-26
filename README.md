@@ -2,7 +2,6 @@
 This repo contains the NeuralWear project source code and hardware designs. Some development documents are also available if you want to dive deeper into the firmware development.
 
 # Compiling and Flashing the NeuralWear1.0 firmware
-**1. Setting up VSCode and PlatformIO**
 Follow the instructions on [PlatformIO](https://platformio.org/platformio-ide) to install the necessary packages. The PlatformIO configuration for working with our NeuralWear1.0 is provided in [platformio.ini](firmware/platformio.ini). Thus, open PlatformIO inside VSCode and point to the firmware folder to start development. You can compile, flash, and even debug the firmware right within PlatformIO without going back to Arduino IDE.
 
 Debugging is a BIG bonus with PlatformIO. NeuralWear1.0 provides an on-board CMSIS-DAP debugger; thus, there is no need for external debugging tools, such as JLink. The debugging function should work out-of-the-box.
