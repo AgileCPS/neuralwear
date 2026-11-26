@@ -2,14 +2,8 @@
 This repo contains the NeuralWear project source code and hardware designs. Some development documents are also available if you want to dive deeper into the firmware development.
 
 # Compiling and Flashing the NeuralWear1.0 firmware
-**1. Getting the Arduino NICLA Voice framework**
-
-NeuralWear 1.0 uses the Arduino NICLA Voice as the main controller, which is a tiny, ultra-low-power development board featuring an integrated microphone, 6-axis IMU, and a Syntiant NDP120 Neural Decision Processor for always-on, edge-based time-series signals (EEG/EOG/EMG) processing. Download the [Arduino IDE](https://docs.arduino.cc/software/ide/) and install the Arduino Mbed OS NICLA Boards from its board manager. 
-Once the Arduino IDE and Mbed OS NICLA Boards package have been installed, open [src.ino](firmware/src/src.ino) with the Arduino IDE, compile and upload the project to the NeuralWear hardware.
-
-**2. (Optional) Setting up VSCode and PlatformIO**
-
-While it is totally fine to use Arduino IDE to develop and compile the code, it is much more convenient to use VSCode and PlatformIO. Follow the instructions on [PlatformIO](https://platformio.org/platformio-ide) to install the necessary packages. The PlatformIO configuration for working with our NeuralWear1.0 is provided in [platformio.ini](firmware/platformio.ini). Thus, open PlatformIO inside VSCode and point to the firmware folder to start development. You can compile, flash, and even debug the firmware right within PlatformIO without going back to Arduino IDE.
+**1. Setting up VSCode and PlatformIO**
+Follow the instructions on [PlatformIO](https://platformio.org/platformio-ide) to install the necessary packages. The PlatformIO configuration for working with our NeuralWear1.0 is provided in [platformio.ini](firmware/platformio.ini). Thus, open PlatformIO inside VSCode and point to the firmware folder to start development. You can compile, flash, and even debug the firmware right within PlatformIO without going back to Arduino IDE.
 
 Debugging is a BIG bonus with PlatformIO. NeuralWear1.0 provides an on-board CMSIS-DAP debugger; thus, there is no need for external debugging tools, such as JLink. The debugging function should work out-of-the-box.
 
@@ -58,7 +52,7 @@ Turn on the NeuralWear device. We need to make sure that the battery connected t
 
 *Fig.4: OpenVibe-acquisition-server*
 
-On the Driver box, we choose the iES driver. Then, to choose the device to connect to, click on the Driver Properties box. We will have the following screen:
+On the Driver box, we choose the NeuralWear driver. Then, to choose the device to connect to, click on the Driver Properties box. We will have the following screen:
 
 <img width="195" height="317" alt="image" src="https://github.com/user-attachments/assets/f20dde18-d1aa-4bac-9d24-83a8a8c2bcc2" />
 
